@@ -46,7 +46,7 @@ INDEX_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inde
 def hash_password(pw: str) -> str:
     return hashlib.sha256(f"{pw}{CONFIG['secret']}".encode()).hexdigest()
 
-# Initial admin password: if not set in environment or equals empty, first startup will prompt Setup Password
+# Initial admin password: if not set in environment or equals empty, first startup prompts Setup Password
 env_admin_pwd = os.environ.get("ADMIN_PASSWORD", "")
 AUTH = {
     "password_hash": hash_password(env_admin_pwd) if env_admin_pwd else "",
@@ -210,7 +210,8 @@ SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
             document.getElementById('app').innerHTML = `
                 <div style="text-align:center; margin-bottom:8px;">
                     <svg viewBox="0 0 496 512" fill="var(--accent)" style="width:52px; height:52px; margin-bottom:12px; filter:drop-shadow(0 0 12px var(--accent-bg));">
-                        <path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z'/></svg>
+                        <path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z'/>
+                    </svg>
                     <h1 style="margin:0; font-size:1.8rem; font-weight:800; letter-spacing:-0.03em;">R2Leafy</h1>
                     <p style="color:var(--text-muted); font-size:0.85rem; font-weight:600; margin-top:6px;">Subscription Profile</p>
                 </div>
@@ -218,10 +219,10 @@ SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
                         <h2 class="card-title" style="margin:0;"><i class="fa-solid fa-user-shield text-accent"></i> ${DATA.client.name}</h2>
-                        <span class="tag" style="background:${DATA.client.status?'var(--success)':'var(--danger)'}20; color:${DATA.client.status?'var(--success)':'var(--danger)'};">${DATA.client.status?'ACTIVE':'OFFLINE'}</span>
+                        <span class="tag" style="background:${DATA.client.status?'var(--accent-bg)':'rgba(239,68,68,0.15)'}; color:${DATA.client.status?'var(--accent)':'var(--danger)'}; border:1px solid ${DATA.client.status?'rgba(139,92,246,0.25)':'rgba(239,68,68,0.25)'};">${DATA.client.status?'ACTIVE':'OFFLINE'}</span>
                     </div>
                     <div class="stat-grid">
-                        <div class="stat-box"><div class="stat-label">Used Data</div><div class="stat-val">${u>0?u.toFixed(2):'0'} GB</div></div>
+                        <div class="stat-box"><div class="stat-label">Used Data</div><div class="stat-val">${u>0?u.toFixed(2):'0.00'} GB</div></div>
                         <div class="stat-box"><div class="stat-label">Total Quota</div><div class="stat-val">${fmtGB(l)}</div></div>
                         <div class="stat-box" style="grid-column:1/-1;">
                             <div style="display:flex; justify-content:space-between; align-items:center;"><span class="stat-label" style="margin:0;">Consumption</span><span style="font-size:0.8rem; font-weight:800;">${p.toFixed(1)}%</span></div>
@@ -324,6 +325,57 @@ def generate_vless_link(uuid: str, remark: str = "R2Leafy", address: str = None)
     }
     query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
     return f"vless://{uuid}@{addr}:443?{query}#{quote(remark)}"
+
+def resolve_name_placeholders(text: str, client: dict) -> str:
+    if not text:
+        return "R2Leafy Node"
+    t = text
+    used_gb = round(client.get("used_bytes", 0) / (1024.0 * 1024.0 * 1024.0), 2)
+    limit_gb = client.get("limit", 0)
+    limit_str = f"{limit_gb:.2f}GB" if limit_gb > 0 else "Unlimited"
+    remain_str = f"{max(0, limit_gb - used_gb):.2f}GB" if limit_gb > 0 else "Unlimited"
+    exp_str = client.get("expiry", "")[:10] if client.get("expiry") else "Never"
+    
+    t = t.replace("%client-name%", client.get("name", "Client"))
+    t = t.replace("%data-used%", f"{used_gb:.2f}")
+    t = t.replace("%data-total%", limit_str)
+    t = t.replace("%data-remain%", remain_str)
+    t = t.replace("%expiry-date%", exp_str)
+    return t
+
+def build_client_sub_links(client: dict) -> list:
+    cid = client["id"]
+    domain = get_domain()
+    custom_entries = SUB_CLIENT_SUBSCRIPTIONS.get(cid, [])
+    
+    sub_links = []
+    if custom_entries and isinstance(custom_entries, list) and len(custom_entries) > 0:
+        for entry in custom_entries:
+            etype = entry.get("type", "proxy")
+            raw_name = entry.get("name", "R2Leafy Node")
+            resolved_name = resolve_name_placeholders(raw_name, client)
+            
+            if etype == "proxy":
+                ip = (entry.get("ipAddress") or "").strip() or domain
+                transport = entry.get("transport", "xhttp").lower()
+                
+                if transport == "ws":
+                    link = f"vless://{cid}@{ip}:443?encryption=none&security=tls&type=ws&host={domain}&path=%2Fws&sni={domain}&fp=chrome&alpn=http/1.1#{quote(resolved_name)}"
+                else:
+                    link = f"vless://{cid}@{ip}:443?encryption=none&security=tls&type=xhttp&host={domain}&path=%2F&sni={domain}&fp=chrome&alpn=http/1.1&mode=packet-up#{quote(resolved_name)}"
+                sub_links.append(link)
+            elif etype == "info":
+                info_link = f"trojan://{generate_uuid()}@127.0.0.1:80?security=none#{quote(resolved_name)}"
+                sub_links.append(info_link)
+    
+    # Fallback to direct node + custom clean addresses
+    if not sub_links:
+        sub_links.append(generate_vless_link(cid, remark=f"R2Leafy🍃 {client['name']}-Direct", address=domain))
+        for i, addr in enumerate(CUSTOM_ADDRESSES):
+            if addr:
+                sub_links.append(generate_vless_link(cid, remark=f"R2Leafy🍃 {client['name']}-Node{i+1}", address=addr))
+    
+    return sub_links
 
 # ---------------------------------------------------------------------------
 # State Persistence (Save & Load)
@@ -859,14 +911,8 @@ async def public_subscription_endpoint(encoded_id: str, request: Request):
     if not client.get("status", 1):
         raise HTTPException(status_code=403, detail="Subscription disabled")
 
-    # Generate VLESS nodes
-    sub_links = []
-    main_domain = get_domain()
-    sub_links.append(generate_vless_link(client["id"], remark=f"R2Leafy🍃 {client['name']}-Direct", address=main_domain))
-
-    for i, addr in enumerate(CUSTOM_ADDRESSES):
-        if addr:
-            sub_links.append(generate_vless_link(client["id"], remark=f"R2Leafy🍃 {client['name']}-Node{i+1}", address=addr))
+    # Generate custom nodes from Subscription Lab
+    sub_links = build_client_sub_links(client)
 
     sub_content = "\n".join(sub_links)
     encoded_payload = base64.b64encode(sub_content.encode()).decode()
