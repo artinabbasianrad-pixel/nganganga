@@ -15,7 +15,7 @@ import httpx
 import psutil
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("R2Leafy")
@@ -128,6 +128,7 @@ IP_TELEMETRY: dict = {
 http_client: httpx.AsyncClient | None = None
 core_running: bool = True
 
+
 SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -154,7 +155,7 @@ SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
         .tag { padding: 4px 12px; border-radius: 8px; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
         .btn { width: 100%; background: var(--bg-hover); color: var(--text-main); border: 1px solid var(--border); padding: 14px; border-radius: var(--radius-sm); font-size: 0.9rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; font-family: inherit; transition: all 0.2s ease; margin-top: 12px; }
         .btn:hover { background: var(--border-hover); transform: translateY(-1px); }
-        .btn-primary { background: var(--accent); color: #fff; border: none; box-shadow: 0 4px 12px rgba(139,92,246,0.35); }
+        .btn-primary { background: var(--accent); color: #000; border: none; box-shadow: 0 4px 12px rgba(139,92,246,0.35); }
         .btn-primary:hover { background: var(--accent-hover); color: #fff; }
         .btn-icon { width: 40px; height: 40px; padding: 0; margin: 0; }
         .link-item { background: var(--bg-base); border: 1px solid var(--border); padding: 14px; border-radius: var(--radius-sm); display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; transition: border-color 0.2s; }
@@ -177,7 +178,7 @@ SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
         
         .import-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 12px; }
         .btn-import { background: var(--bg-base); border: 1px solid var(--border); color: var(--text-main); text-decoration: none; padding: 14px 10px; border-radius: var(--radius-sm); font-size: 0.85rem; font-weight: 700; text-align: center; transition: all 0.2s; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
-        .btn-import:hover { background: var(--bg-hover); border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(139,92,246,0.25); }
+        .btn-import:hover { background: var(--bg-hover); border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(16,185,129,0.15); }
         .btn-import i { font-size: 1.5rem; }
         
         .footer { text-align: center; margin-top: 20px; font-size: 0.8rem; color: var(--text-muted); font-weight: 600; }
@@ -210,19 +211,19 @@ SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
             document.getElementById('app').innerHTML = `
                 <div style="text-align:center; margin-bottom:8px;">
                     <svg viewBox="0 0 496 512" fill="var(--accent)" style="width:52px; height:52px; margin-bottom:12px; filter:drop-shadow(0 0 12px var(--accent-bg));">
-                        <path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z'/>
+                        <path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/>
                     </svg>
                     <h1 style="margin:0; font-size:1.8rem; font-weight:800; letter-spacing:-0.03em;">R2Leafy</h1>
-                    <p style="color:var(--text-muted); font-size:0.85rem; font-weight:600; margin-top:6px;">Subscription Profile</p>
+                    <p style="color:var(--text-muted); font-size:0.85rem; font-weight:600; margin-top:6px;">Subscription Environment</p>
                 </div>
                 
                 <div class="card">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
                         <h2 class="card-title" style="margin:0;"><i class="fa-solid fa-user-shield text-accent"></i> ${DATA.client.name}</h2>
-                        <span class="tag" style="background:${DATA.client.status?'var(--accent-bg)':'rgba(239,68,68,0.15)'}; color:${DATA.client.status?'var(--accent)':'var(--danger)'}; border:1px solid ${DATA.client.status?'rgba(139,92,246,0.25)':'rgba(239,68,68,0.25)'};">${DATA.client.status?'ACTIVE':'OFFLINE'}</span>
+                        <span class="tag" style="background:${DATA.client.status?'var(--success)':'var(--danger)'}20; color:${DATA.client.status?'var(--success)':'var(--danger)'};">${DATA.client.status?'ACTIVE':'OFFLINE'}</span>
                     </div>
                     <div class="stat-grid">
-                        <div class="stat-box"><div class="stat-label">Used Data</div><div class="stat-val">${u>0?u.toFixed(2):'0.00'} GB</div></div>
+                        <div class="stat-box"><div class="stat-label">Used Data</div><div class="stat-val">${u>0?u.toFixed(2):'0'} GB</div></div>
                         <div class="stat-box"><div class="stat-label">Total Quota</div><div class="stat-val">${fmtGB(l)}</div></div>
                         <div class="stat-box" style="grid-column:1/-1;">
                             <div style="display:flex; justify-content:space-between; align-items:center;"><span class="stat-label" style="margin:0;">Consumption</span><span style="font-size:0.8rem; font-weight:800;">${p.toFixed(1)}%</span></div>
@@ -246,7 +247,7 @@ SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
                 
                 <div class="card">
                     <h2 class="card-title"><i class="fa-solid fa-network-wired text-accent"></i> Core Configurations</h2>
-                    <button class="btn" style="margin-bottom:20px; background:var(--accent-bg); color:var(--accent); border:none;" onclick="cp(DATA.links.join('\n'))"><i class="fa-solid fa-copy"></i> Copy All Configs</button>
+                    <button class="btn" style="margin-bottom:20px; background:var(--accent-bg); color:var(--accent); border:none;" onclick="cp(DATA.links.join('\\n'))"><i class="fa-solid fa-copy"></i> Copy All Configs</button>
                     <div style="display:flex; flex-direction:column;">
                         ${DATA.links.map((lnk,i)=>{
                             let n = 'Node '+(i+1); try{n=decodeURIComponent(lnk.split('#')[1]||n);}catch(e){}
@@ -274,6 +275,7 @@ SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
 </body>
 </html>"""
 
+
 # ---------------------------------------------------------------------------
 # Logging & Helper Functions
 # ---------------------------------------------------------------------------
@@ -286,7 +288,7 @@ def add_log(msg: str):
 # Seed initial system audit logs
 add_log("R2Leafy Gateway core initialized")
 add_log("BBR congestion control active")
-add_log("TLS/WebSocket proxy listener active on port 443")
+add_log("Dual transport active: WebSocket (/ws) + xHTTP (/xhttp, /)")
 add_log("Railway Cloud instance ready")
 
 def get_domain() -> str:
@@ -309,20 +311,36 @@ def uptime_str() -> str:
 def generate_uuid() -> str:
     return secrets.token_hex(4) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(6)
 
-def generate_vless_link(uuid: str, remark: str = "R2Leafy", address: str = None) -> str:
+def generate_vless_link(uuid: str, remark: str = "R2Leafy", address: str = None, transport: str = "ws") -> str:
     domain = get_domain()
     addr = address if address else domain
-    path = f"/ws/{uuid}"
-    params = {
-        "encryption": "none",
-        "security": "tls",
-        "type": "ws",
-        "host": domain,
-        "path": path,
-        "sni": domain,
-        "fp": "chrome",
-        "alpn": "http/1.1",
-    }
+    trans = transport.lower()
+    
+    if trans == "xhttp":
+        path = "%2Fxhttp"
+        params = {
+            "encryption": "none",
+            "security": "tls",
+            "type": "xhttp",
+            "host": domain,
+            "path": path,
+            "sni": domain,
+            "fp": "chrome",
+            "alpn": "h2,http/1.1",
+            "mode": "packet-up"
+        }
+    else:
+        path = f"/ws/{uuid}"
+        params = {
+            "encryption": "none",
+            "security": "tls",
+            "type": "ws",
+            "host": domain,
+            "path": path,
+            "sni": domain,
+            "fp": "chrome",
+            "alpn": "http/1.1",
+        }
     query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
     return f"vless://{uuid}@{addr}:443?{query}#{quote(remark)}"
 
@@ -344,9 +362,12 @@ def resolve_name_placeholders(text: str, client: dict) -> str:
     return t
 
 def build_client_sub_links(client: dict) -> list:
-    cid = client["id"]
+    cid = str(client.get("id", "")).strip()
+    cname = str(client.get("name", "")).strip()
     domain = get_domain()
-    custom_entries = SUB_CLIENT_SUBSCRIPTIONS.get(cid, [])
+    
+    # Check by cid or cname
+    custom_entries = SUB_CLIENT_SUBSCRIPTIONS.get(cid) or SUB_CLIENT_SUBSCRIPTIONS.get(cname) or []
     
     sub_links = []
     if custom_entries and isinstance(custom_entries, list) and len(custom_entries) > 0:
@@ -357,23 +378,24 @@ def build_client_sub_links(client: dict) -> list:
             
             if etype == "proxy":
                 ip = (entry.get("ipAddress") or "").strip() or domain
-                transport = entry.get("transport", "xhttp").lower()
+                transport = str(entry.get("transport", "xhttp")).lower()
                 
                 if transport == "ws":
                     link = f"vless://{cid}@{ip}:443?encryption=none&security=tls&type=ws&host={domain}&path=%2Fws&sni={domain}&fp=chrome&alpn=http/1.1#{quote(resolved_name)}"
                 else:
-                    link = f"vless://{cid}@{ip}:443?encryption=none&security=tls&type=xhttp&host={domain}&path=%2F&sni={domain}&fp=chrome&alpn=http/1.1&mode=packet-up#{quote(resolved_name)}"
+                    link = f"vless://{cid}@{ip}:443?encryption=none&security=tls&type=xhttp&host={domain}&path=%2Fxhttp&sni={domain}&fp=chrome&alpn=h2,http/1.1&mode=packet-up#{quote(resolved_name)}"
                 sub_links.append(link)
             elif etype == "info":
                 info_link = f"trojan://{generate_uuid()}@127.0.0.1:80?security=none#{quote(resolved_name)}"
                 sub_links.append(info_link)
     
-    # Fallback to direct node + custom clean addresses
+    # Fallback to direct xHTTP + direct WS nodes + any custom addresses
     if not sub_links:
-        sub_links.append(generate_vless_link(cid, remark=f"R2Leafy🍃 {client['name']}-Direct", address=domain))
+        sub_links.append(generate_vless_link(cid, remark=f"R2Leafy🍃 {client['name']}-xHTTP", address=domain, transport="xhttp"))
+        sub_links.append(generate_vless_link(cid, remark=f"R2Leafy🍃 {client['name']}-WebSocket", address=domain, transport="ws"))
         for i, addr in enumerate(CUSTOM_ADDRESSES):
             if addr:
-                sub_links.append(generate_vless_link(cid, remark=f"R2Leafy🍃 {client['name']}-Node{i+1}", address=addr))
+                sub_links.append(generate_vless_link(cid, remark=f"R2Leafy🍃 {client['name']}-Node{i+1}", address=addr, transport="xhttp"))
     
     return sub_links
 
@@ -717,7 +739,7 @@ async def get_panel_state(_=Depends(require_auth)):
 async def update_panel_state(request: Request, _=Depends(require_auth)):
     global CLIENTS, SUB_CLIENT_SUBSCRIPTIONS, SETTINGS
     body = await request.json()
-    new_state = body.get("state") or {}
+    new_state = body.get("state") if isinstance(body.get("state"), dict) else body
     reason = body.get("reason", "sync")
 
     async with STATE_LOCK:
@@ -745,7 +767,7 @@ async def update_panel_state(request: Request, _=Depends(require_auth)):
             CLIENTS = updated_clients
 
         if "subClientSubscriptions" in new_state and isinstance(new_state["subClientSubscriptions"], dict):
-            SUB_CLIENT_SUBSCRIPTIONS = new_state["subClientSubscriptions"]
+            SUB_CLIENT_SUBSCRIPTIONS.update(new_state["subClientSubscriptions"])
 
         if "settings" in new_state and isinstance(new_state["settings"], dict):
             SETTINGS.update(new_state["settings"])
@@ -1039,6 +1061,27 @@ async def get_core_config_preview(_=Depends(require_auth)):
                     "enabled": SETTINGS.get("advanced", {}).get("deepSniff", True),
                     "destOverride": ["http", "tls", "quic"]
                 }
+            },
+            {
+                "tag": "vless-xhttp-in",
+                "port": 443,
+                "protocol": "vless",
+                "settings": {
+                    "clients": [{"id": c["id"], "level": 0} for c in CLIENTS if c.get("status", 1)],
+                    "decryption": "none"
+                },
+                "streamSettings": {
+                    "network": "xhttp",
+                    "security": "tls",
+                    "tlsSettings": {
+                        "serverName": domain,
+                        "alpn": ["h2", "http/1.1"]
+                    },
+                    "xhttpSettings": {
+                        "path": "/xhttp",
+                        "mode": "packet-up"
+                    }
+                }
             }
         ],
         "outbounds": [
@@ -1082,7 +1125,7 @@ async def get_stats_api(_=Depends(require_auth)):
     }
 
 # ---------------------------------------------------------------------------
-# VLESS Proxy Header Parser & Tunnel
+# VLESS Proxy Header Parser & Core Engine
 # ---------------------------------------------------------------------------
 RELAY_BUF = 64 * 1024
 
@@ -1141,6 +1184,138 @@ def record_traffic(client_id: str, size: int, is_rx: bool):
         client["used_bytes"] = client.get("used_bytes", 0) + size
         client["usage"] = round(client["used_bytes"] / (1024.0 * 1024.0 * 1024.0), 3)
 
+# ---------------------------------------------------------------------------
+# xHTTP (SplitHTTP / Packet-Up) Proxy Engine
+# ---------------------------------------------------------------------------
+@app.post("/xhttp")
+@app.post("/xhttp/{uuid}")
+@app.post("/ws")
+@app.post("/ws/{uuid}")
+async def xhttp_proxy_handler(request: Request, uuid: str = None):
+    if not core_running:
+        raise HTTPException(status_code=503, detail="Core proxy engine is stopped")
+
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # Read first chunk from request body stream
+    body_stream = request.stream()
+    first_chunk = b""
+    try:
+        async for chunk in body_stream:
+            if chunk:
+                first_chunk = chunk
+                break
+    except Exception:
+        pass
+
+    if not first_chunk or len(first_chunk) < 24:
+        raise HTTPException(status_code=400, detail="Invalid xHTTP payload")
+
+    try:
+        command, address, port, initial_payload = parse_vless_header(first_chunk)
+        
+        target_uuid = uuid
+        if not target_uuid and len(first_chunk) >= 17:
+            raw_u = first_chunk[1:17].hex()
+            target_uuid = f"{raw_u[:8]}-{raw_u[8:12]}-{raw_u[12:16]}-{raw_u[16:20]}-{raw_u[20:]}"
+
+        client = next((c for c in CLIENTS if c["id"] == target_uuid or not uuid), None)
+        if not client and CLIENTS:
+            client = CLIENTS[0]
+
+        if not client or not client.get("status", 1):
+            raise HTTPException(status_code=403, detail="Invalid or disabled client")
+
+        cid = client["id"]
+        conn_id = secrets.token_urlsafe(8)
+        connections[conn_id] = {
+            "uuid": cid,
+            "ip": client_ip,
+            "connected_at": datetime.now().isoformat(),
+            "bytes": len(first_chunk)
+        }
+        link_ip_map[cid].add(client_ip)
+        record_traffic(cid, len(first_chunk), is_rx=True)
+
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(address, port), timeout=10.0)
+
+        if initial_payload:
+            p_size = len(initial_payload)
+            record_traffic(cid, p_size, is_rx=True)
+            writer.write(initial_payload)
+            await writer.drain()
+
+        # Background task to stream remaining upload chunks from client to TCP socket
+        async def stream_upstream():
+            try:
+                async for chunk in body_stream:
+                    if chunk:
+                        c_size = len(chunk)
+                        if not check_client_quota(cid, c_size):
+                            break
+                        record_traffic(cid, c_size, is_rx=True)
+                        writer.write(chunk)
+                        await writer.drain()
+            except Exception:
+                pass
+            finally:
+                try:
+                    writer.write_eof()
+                except Exception:
+                    pass
+
+        asyncio.create_task(stream_upstream())
+
+        # Generator to stream downstream TCP response chunks to HTTP response
+        async def stream_downstream():
+            try:
+                while True:
+                    data = await reader.read(RELAY_BUF)
+                    if not data:
+                        break
+                    d_size = len(data)
+                    if not check_client_quota(cid, d_size):
+                        break
+                    record_traffic(cid, d_size, is_rx=False)
+                    if conn_id in connections:
+                        connections[conn_id]["bytes"] += d_size
+                    yield data
+            except Exception:
+                pass
+            finally:
+                if writer:
+                    try:
+                        writer.close()
+                    except Exception:
+                        pass
+                info = connections.pop(conn_id, None)
+                if info:
+                    uid_clean = info.get("uuid")
+                    ip_clean = info.get("ip")
+                    if uid_clean and ip_clean:
+                        has_other = any(c.get("uuid") == uid_clean and c.get("ip") == ip_clean for c in connections.values())
+                        if not has_other and uid_clean in link_ip_map:
+                            link_ip_map[uid_clean].discard(ip_clean)
+
+        response_headers = {
+            "Content-Type": "application/octet-stream",
+            "Transfer-Encoding": "chunked",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive"
+        }
+        return StreamingResponse(stream_downstream(), headers=response_headers)
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        stats["total_errors"] += 1
+        error_logs.append({"error": str(exc), "time": datetime.now().isoformat()})
+        raise HTTPException(status_code=502, detail=f"Proxy error: {exc}")
+
+# ---------------------------------------------------------------------------
+# WebSocket VLESS Tunnel Engine
+# ---------------------------------------------------------------------------
 async def ws_to_tcp(websocket: WebSocket, writer: asyncio.StreamWriter, conn_id: str, client_id: str):
     try:
         while True:
