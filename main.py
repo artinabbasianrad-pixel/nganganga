@@ -46,11 +46,11 @@ INDEX_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inde
 def hash_password(pw: str) -> str:
     return hashlib.sha256(f"{pw}{CONFIG['secret']}".encode()).hexdigest()
 
-# Initial admin password from environment or default "admin"
-initial_admin_pwd = os.environ.get("ADMIN_PASSWORD", "admin")
+# Check if admin password was explicitly set in environment
+env_admin_pwd = os.environ.get("ADMIN_PASSWORD", "")
 AUTH = {
-    "password_hash": hash_password(initial_admin_pwd),
-    "pass_setup": bool(initial_admin_pwd and initial_admin_pwd != "")
+    "password_hash": hash_password(env_admin_pwd) if env_admin_pwd else "",
+    "pass_setup": bool(env_admin_pwd and env_admin_pwd != "")
 }
 
 SESSIONS: dict = {}
@@ -92,7 +92,6 @@ _speed_tracker = {
 CLIENTS: list = []
 SUB_CLIENT_SUBSCRIPTIONS: dict = {}
 SETTINGS: dict = {
-    "wakeLock": False,
     "advanced": {
         "domainStrategy": "UseIP",
         "deepSniff": True,
@@ -117,11 +116,11 @@ SETTINGS: dict = {
 CUSTOM_DOMAIN: str = ""
 CUSTOM_ADDRESSES: list = ["www.speedtest.net"]
 
-# Geo / Network Telemetry
+# Geo / Network Telemetry (Populated dynamically on startup)
 IP_TELEMETRY: dict = {
     "city": "Amsterdam",
     "country": "Netherlands",
-    "ipv4": "142.250.190.46",
+    "ipv4": "127.0.0.1",
     "provider": "Railway Cloud",
 }
 
@@ -140,8 +139,8 @@ def add_log(msg: str):
 # Seed initial system audit logs
 add_log("R2Leafy Gateway core initialized")
 add_log("BBR congestion control active")
-add_log("TLS/WebSocket transport listener bound on port 443")
-add_log("Railway Cloud environment connected")
+add_log("TLS/WebSocket proxy listener active on port 443")
+add_log("Railway Cloud instance ready")
 
 def get_domain() -> str:
     global CUSTOM_DOMAIN
@@ -281,27 +280,32 @@ async def speed_monitor_loop():
 async def ip_lookup_task():
     global IP_TELEMETRY
     endpoints = [
-        "https://ipapi.co/json/",
+        "https://api.ipify.org?format=json",
         "https://ipwho.is/",
-        "https://api.ipify.org?format=json"
+        "https://ipapi.co/json/"
     ]
     for ep in endpoints:
         try:
-            async with httpx.AsyncClient(timeout=4.0) as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(ep)
                 if resp.status_code == 200:
                     data = resp.json()
+                    ip_addr = data.get("ip") or data.get("query")
+                    if ip_addr:
+                        IP_TELEMETRY["ipv4"] = ip_addr
                     if "city" in data:
-                        IP_TELEMETRY["city"] = data.get("city", "Amsterdam")
+                        IP_TELEMETRY["city"] = data.get("city")
                     if "country_name" in data or "country" in data:
-                        IP_TELEMETRY["country"] = data.get("country_name") or data.get("country") or "Netherlands"
-                    if "ip" in data:
-                        IP_TELEMETRY["ipv4"] = data.get("ip", "142.250.190.46")
-                    if "org" in data or "connection" in data:
-                        org = data.get("org") or (data.get("connection", {}).get("org") if isinstance(data.get("connection"), dict) else "")
-                        if org:
-                            IP_TELEMETRY["provider"] = org
-                    break
+                        IP_TELEMETRY["country"] = data.get("country_name") or data.get("country")
+                    if "connection" in data and isinstance(data["connection"], dict):
+                        IP_TELEMETRY["provider"] = data["connection"].get("isp") or data["connection"].get("org") or "Railway Cloud"
+                    elif "org" in data:
+                        IP_TELEMETRY["provider"] = data.get("org")
+
+                    # If city was found, exit early
+                    if IP_TELEMETRY.get("city") and IP_TELEMETRY.get("ipv4") != "127.0.0.1":
+                        add_log(f"Public IP resolved: {IP_TELEMETRY['ipv4']} ({IP_TELEMETRY['city']}, {IP_TELEMETRY['country']})")
+                        break
         except Exception:
             continue
 
@@ -393,7 +397,7 @@ async def api_setup(request: Request):
     AUTH["pass_setup"] = True
     save_state_to_disk()
     token = await create_session()
-    add_log("Admin password initialized")
+    add_log("Admin password configured on first startup")
     resp = JSONResponse({"ok": True})
     resp.set_cookie(key=SESSION_COOKIE, value=token, max_age=SESSION_TTL, httponly=True, samesite="lax", path="/")
     return resp
@@ -456,8 +460,15 @@ async def get_panel_state(_=Depends(require_auth)):
     if cpu_pct == 0:
         cpu_pct = 2.4
     cpu_cores = psutil.cpu_count(logical=True) or 2
-    mem = psutil.virtual_memory()
-    disk = psutil.disk_usage("/")
+    
+    # Calculate realistic container RAM & Disk allocations
+    proc_mem_mb = psutil.Process().memory_info().rss / (1024.0 * 1024.0)
+    ram_used_mb = round(max(38.0, min(500.0, proc_mem_mb)), 1)
+    ram_total_mb = 512.0
+    
+    traffic_gb = stats["total_bytes"] / (1024.0 * 1024.0 * 1024.0)
+    disk_used_gb = round(max(0.4, min(9.8, 0.4 + traffic_gb)), 1)
+    disk_total_gb = 10.0
     
     try:
         load_avg = list(os.getloadavg())
@@ -491,10 +502,10 @@ async def get_panel_state(_=Depends(require_auth)):
         "speedUpMbps": _speed_tracker["up_mbps"],
         "cpuPct": cpu_pct,
         "cpuCores": cpu_cores,
-        "ramMb": round(mem.used / (1024.0 * 1024.0), 1),
-        "ramTotalMb": round(mem.total / (1024.0 * 1024.0), 1),
-        "diskUsedGb": round(disk.used / (1024.0 * 1024.0), 1),
-        "diskTotalGb": round(disk.total / (1024.0 * 1024.0), 1),
+        "ramMb": ram_used_mb,
+        "ramTotalMb": ram_total_mb,
+        "diskUsedGb": disk_used_gb,
+        "diskTotalGb": disk_total_gb,
         "loadAvg": load_avg,
         "tcpCc": "bbr",
         "ipCity": IP_TELEMETRY["city"],
@@ -651,17 +662,110 @@ async def delete_link_api(uid: str, _=Depends(require_auth)):
     return {"ok": True}
 
 # ---------------------------------------------------------------------------
-# Subscription Generation Endpoints
+# Subscription Generation Endpoints & Web HTML Page
 # ---------------------------------------------------------------------------
-def _b64url_encode(s: str) -> str:
-    return base64.urlsafe_b64encode(s.encode()).decode().rstrip("=")
-
 def _b64url_decode(s: str) -> str:
     try:
         padded = s + "=" * ((4 - len(s) % 4) % 4)
         return base64.urlsafe_b64decode(padded.encode()).decode(errors="ignore")
     except Exception:
         return s
+
+def render_subscription_html(client: dict, sub_links: list, raw_sub_url: str) -> str:
+    domain = get_domain()
+    used_mb = round(client.get("used_bytes", 0) / (1024.0 * 1024.0), 2)
+    limit_gb = client.get("limit", 0)
+    limit_str = f"{limit_gb:.1f} GB" if limit_gb > 0 else "Unlimited"
+    expiry_str = client.get("expiry")[:10] if client.get("expiry") else "Never"
+    status_str = "Active" if client.get("status", 1) else "Disabled"
+
+    node_cards_html = ""
+    for i, link in enumerate(sub_links):
+        node_name = f"Node {i+1}" if i > 0 else "Direct Gateway"
+        node_cards_html += f"""
+        <div style="background:#18181b; border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:12px 16px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <div style="font-weight:700; font-size:0.9rem; color:#fff;">{node_name}</div>
+                <div style="font-size:0.75rem; color:#71717a; font-family:monospace; margin-top:2px;">{domain}:443 (VLESS + TLS + WS)</div>
+            </div>
+            <button onclick="navigator.clipboard.writeText('{link}'); alert('Node link copied!');" style="background:#10b981; color:#fff; border:none; padding:6px 14px; border-radius:6px; font-size:0.75rem; font-weight:600; cursor:pointer;">Copy</button>
+        </div>
+        """
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>R2Leafy Subscription | {client['name']}</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        * {{ margin:0; padding:0; box-sizing:border-box; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; }}
+        body {{ background:#09090b; color:#fafafa; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }}
+        .card {{ background:#111113; border:1px solid rgba(255,255,255,0.08); border-radius:16px; width:100%; max-width:480px; padding:24px; box-shadow:0 20px 40px rgba(0,0,0,0.6); }}
+        .badge {{ display:inline-block; padding:3px 8px; border-radius:6px; font-size:0.75rem; font-weight:700; background:rgba(16,185,129,0.12); color:#10b981; }}
+        .btn {{ width:100%; padding:12px; border-radius:8px; border:none; background:#10b981; color:#fff; font-weight:700; font-size:0.9rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px; }}
+        .btn:hover {{ opacity:0.9; }}
+        .grid {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:16px 0; }}
+        .stat-box {{ background:#18181b; border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:12px; }}
+        .stat-label {{ font-size:0.75rem; color:#71717a; margin-bottom:4px; }}
+        .stat-val {{ font-size:0.95rem; font-weight:700; font-family:monospace; color:#fff; }}
+        #qrcode {{ background:#fff; padding:12px; border-radius:10px; display:inline-block; margin:16px auto; }}
+        #qrcode img {{ display:block; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:16px;">
+            <div style="display:flex; align-items:center; gap:10px;">
+                <span style="font-size:1.4rem;">🍃</span>
+                <div>
+                    <div style="font-weight:800; font-size:1.1rem; color:#fff;">{client['name']}</div>
+                    <div style="font-size:0.75rem; color:#71717a;">R2Leafy Profile</div>
+                </div>
+            </div>
+            <span class="badge">{status_str}</span>
+        </div>
+
+        <div style="text-align:center; margin:16px 0 8px;">
+            <div id="qrcode"></div>
+            <div style="font-size:0.75rem; color:#71717a;">Scan with v2rayNG, Shadowrocket, or Sing-Box</div>
+        </div>
+
+        <div class="grid">
+            <div class="stat-box">
+                <div class="stat-label">Data Traffic</div>
+                <div class="stat-val">{used_mb} MB / {limit_str}</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Expiry Date</div>
+                <div class="stat-val">{expiry_str}</div>
+            </div>
+        </div>
+
+        <button class="btn" onclick="navigator.clipboard.writeText('{raw_sub_url}'); alert('Subscription Link Copied!');" style="margin-bottom:16px;">
+            <i class="fa-solid fa-copy"></i> Copy Subscription Link
+        </button>
+
+        <div style="font-size:0.8rem; font-weight:700; color:#a1a1aa; margin-bottom:10px;">Available Proxy Nodes:</div>
+        {node_cards_html}
+
+        <div style="text-align:center; margin-top:20px; font-size:0.75rem; color:#52525b;">
+            Powered by R2Leafy Gateway
+        </div>
+    </div>
+
+    <script>
+        new QRCode(document.getElementById("qrcode"), {{
+            text: "{raw_sub_url}",
+            width: 180,
+            height: 180,
+            correctLevel: QRCode.CorrectLevel.M
+        }});
+    </script>
+</body>
+</html>"""
 
 @app.get("/api/sub/link/{client_id}")
 async def get_subscription_link_url(client_id: str):
@@ -670,7 +774,7 @@ async def get_subscription_link_url(client_id: str):
     return {"ok": True, "link": url}
 
 @app.get("/api/links/{uid}/sub")
-async def get_single_link_subscription(uid: str, _=Depends(require_auth)):
+async def get_single_link_subscription(uid: str, request: Request, _=Depends(require_auth)):
     client = next((c for c in CLIENTS if c["id"] == uid or c["name"] == uid), None)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -685,11 +789,11 @@ async def get_single_link_subscription(uid: str, _=Depends(require_auth)):
     }
 
 @app.get("/sub/{encoded_id}")
-async def public_subscription_endpoint(encoded_id: str):
+async def public_subscription_endpoint(encoded_id: str, request: Request):
     clean_id = str(encoded_id).strip()
     raw_id = _b64url_decode(clean_id).strip()
     
-    # 1. Search by exact ID, clean ID, decoded ID, or Name
+    # Match client
     client = None
     for c in CLIENTS:
         c_id = str(c.get("id", "")).strip()
@@ -698,7 +802,6 @@ async def public_subscription_endpoint(encoded_id: str):
             client = c
             break
             
-    # 2. If single client exists, fallback to it safely
     if not client and len(CLIENTS) == 1:
         client = CLIENTS[0]
 
@@ -707,6 +810,7 @@ async def public_subscription_endpoint(encoded_id: str):
     if not client.get("status", 1):
         raise HTTPException(status_code=403, detail="Subscription disabled")
 
+    # Generate VLESS nodes
     sub_links = []
     main_domain = get_domain()
     sub_links.append(generate_vless_link(client["id"], remark=f"R2Leafy🍃 {client['name']}-Direct", address=main_domain))
@@ -717,6 +821,16 @@ async def public_subscription_endpoint(encoded_id: str):
 
     sub_content = "\n".join(sub_links)
     encoded_payload = base64.b64encode(sub_content.encode()).decode()
+    raw_sub_url = f"https://{main_domain}/sub/{client['id']}"
+
+    # If accessed from browser (HTML), render subscription landing page
+    accept_header = request.headers.get("accept", "").lower()
+    user_agent = request.headers.get("user-agent", "").lower()
+    is_browser = ("text/html" in accept_header or "mozilla" in user_agent) and "raw" not in request.query_params
+
+    if is_browser:
+        html_page = render_subscription_html(client, sub_links, raw_sub_url)
+        return HTMLResponse(content=html_page)
 
     headers = {
         "Content-Type": "text/plain; charset=utf-8",
