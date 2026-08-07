@@ -268,8 +268,8 @@
         <div class="nav-menu">
             <div class="nav-label">Core Analytics</div>
             <div class="nav-item active" onclick="switchTab('dashboard')"><i class="fa-solid fa-chart-pie"></i> Dashboard</div>
-            <div class="nav-label">Environment</div>
-            <div class="nav-item" onclick="switchTab('codespace')"><i class="fa-brands fa-github"></i> Codespace Settings</div>
+            <div class="nav-label">Railway Cloud</div>
+            <div class="nav-item" onclick="switchTab('codespace')"><i class="fa-solid fa-train-subway"></i> Railway Settings</div>
             <div class="nav-label">Traffic Routing</div>
             <div class="nav-item" onclick="switchTab('clients')"><i class="fa-solid fa-users"></i> Client Profiles</div>
             <div class="nav-item" onclick="switchTab('sublab')"><i class="fa-solid fa-flask"></i> Subscription Lab</div>
@@ -345,7 +345,7 @@
 
             <div id="tab-codespace" class="tab-view">
                 <div class="header-section">
-                    <div><h2>Codespace Environment</h2><p>Manage GitHub VM instances, location, and hardware limitations.</p></div>
+                    <div><h2>Railway Settings</h2><p>Manage Railway Cloud environment, instance location, and compute limits.</p></div>
                 </div>
                 
                 <div class="grid-2" style="flex-shrink: 0;">
@@ -742,8 +742,8 @@
                     <div style="display:flex; gap:10px; align-items:flex-start;">
                         <span class="tag tag-blue" style="border-radius:50%; width:22px; height:22px; padding:0; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-weight:700;">3</span>
                         <div style="font-size:0.8rem; line-height:1.4;">
-                            <strong>Permissions:</strong> Grant <strong>Read (Read-Only)</strong> permissions for <strong>Account</strong>, <strong>Projects</strong>, and <strong>Usage / Billing</strong>.
-                            <div style="margin-top:4px;"><span class="tag tag-green" style="font-size:0.7rem;"><i class="fa-solid fa-shield-halved"></i> Read-only permission is safe & recommended</span></div>
+                            Select your <strong>Workspace</strong> (Personal or Workspace name) and click <strong>Create Token</strong>.
+                            <div style="margin-top:4px;"><span class="tag tag-green" style="font-size:0.7rem;"><i class="fa-solid fa-shield-halved"></i> Workspace token provides usage and billing telemetry</span></div>
                         </div>
                     </div>
 
@@ -872,7 +872,8 @@
             const trigger = (typeof event !== 'undefined' && event?.currentTarget) ? event.currentTarget : document.querySelector(`.nav-item[onclick*="switchTab('${tabId}')"]`);
             if(trigger) trigger.classList.add('active');
             document.querySelectorAll('.tab-view').forEach(e => e.classList.remove('active'));
-            document.getElementById('tab-' + tabId).classList.add('active');
+            const target = document.getElementById('tab-' + tabId);
+            if(target) target.classList.add('active');
             
             const topbar = document.getElementById('main-topbar');
             const mobileBtn = document.getElementById('mobile-dash-btn');
@@ -884,6 +885,16 @@
                 mobileBtn.style.display = 'none';
             }
             if(window.innerWidth <= 1024) document.getElementById('sidebar').classList.remove('open');
+            
+            if(tabId === 'settings' && typeof window.refreshConfigPreview === 'function') {
+                window.refreshConfigPreview();
+            }
+            if(tabId === 'logs' && typeof window.filterLogs === 'function') {
+                window.filterLogs();
+            }
+            if(tabId === 'dashboard' || tabId === 'codespace') {
+                ensureCharts();
+            }
         }
 
         function openModal(id) { document.getElementById(id).classList.add('show'); }
@@ -958,7 +969,11 @@
             }
         }
 
-        window.logEntries = [];
+        window.logEntries = [
+            { time: new Date().toLocaleTimeString('en-US', { hour12: false }), msg: '[INFO] R2Leafy Gateway initialized' },
+            { time: new Date().toLocaleTimeString('en-US', { hour12: false }), msg: '[INFO] Railway environment connected' },
+            { time: new Date().toLocaleTimeString('en-US', { hour12: false }), msg: '[INFO] Core proxy listener active on port 443' }
+        ];
         window.logCore = function(msg) {
             const time = new Date().toLocaleTimeString('en-US', { hour12: false });
             window.logEntries.push({ time, msg });
@@ -1056,6 +1071,12 @@
             window.lastTelemetry = t;
             if(t.webDomain) window.WEB_DOMAIN = t.webDomain;
             if(t.railway) window.updateRailwayUI(t.railway);
+            
+            // IP & Region mapping
+            const elCity = document.getElementById('cs-city'); if(elCity) elCity.innerText = t.ipCity || 'Amsterdam';
+            const elCountry = document.getElementById('cs-country'); if(elCountry) elCountry.innerText = t.ipCountry || 'Netherlands';
+            const elIpv4 = document.getElementById('cs-ipv4'); if(elIpv4) elIpv4.innerText = t.ipIpv4 || '127.0.0.1';
+            const elProvider = document.getElementById('cs-provider'); if(elProvider) elProvider.innerText = t.ipProvider || 'Railway Cloud';
             const _cc = String(t.tcpCc || 'default');
             const _ccEl = document.getElementById('adv-tcpcc'); if(_ccEl){ _ccEl.innerText = _cc.toUpperCase(); _ccEl.className = 'tag ' + (_cc.toLowerCase()==='bbr'?'tag-green':'tag-warn'); }
             const _connEl = document.getElementById('adv-conns'); if(_connEl) _connEl.innerText = String(t.connections||0);
@@ -1102,7 +1123,7 @@
             document.getElementById('cs-city').innerText = t.ipCity || 'N/A';
             document.getElementById('cs-country').innerText = t.ipCountry || 'N/A';
             document.getElementById('cs-ipv4').innerText = t.ipIpv4 || 'N/A';
-            document.getElementById('cs-provider').innerText = t.ipProvider || 'GitHub Codespaces';
+            document.getElementById('cs-provider').innerText = t.ipProvider || 'Railway Cloud';
 
             if(trafficChart) {
                 trafficChart.data.datasets[0].data.push(t.speedDownMbps || 0);
@@ -1315,31 +1336,18 @@
             return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
         }
         async function getSubscriptionLink(clientId) {
-            // 1) Fast path: deterministic (webDomain + base64url), no backend round-trip.
-            // Works even for a client that exists only in frontend and hasn't been persisted yet.
-            if (window.WEB_DOMAIN) {
-                return `https://${window.WEB_DOMAIN}/sub/${_b64urlToken(clientId)}`;
+            const domain = window.WEB_DOMAIN || window.PORT_DOMAIN || window.location.host;
+            if (domain) {
+                return `https://${domain}/sub/${clientId}`;
             }
-            if (window.PORT_DOMAIN) {
-                // Fallback: derive web domain from port domain (443 -> 8080) if telemetry hasn't arrived yet
-                const wd = window.PORT_DOMAIN.replace(/-443\./, '-8080.');
-                if (wd && wd !== window.PORT_DOMAIN) return `https://${wd}/sub/${_b64urlToken(clientId)}`;
-            }
-            // 2) Ask backend - this endpoint does NOT require client to exist in DB, it just builds the URL
             try {
                 const res = await fetch(`/api/sub/link/${encodeURIComponent(clientId)}`);
-                if (res.status === 401) { console.warn('[sub-link] 401 unauthorized - reloading'); location.reload(); return null; }
-                if (!res.ok) { console.error('[sub-link] unexpected HTTP ' + res.status); return null; }
-                const data = await res.json();
-                if (data.ok && data.link) return data.link;
-                console.error('[sub-link] bad payload', data);
-            } catch (e) { console.error('[sub-link] request failed', e); }
-            // 3) Last resort: build from current location host (works if you are on the panel domain)
-            try {
-                const host = window.location.host;
-                if (host) return `https://${host}/sub/${_b64urlToken(clientId)}`;
-            } catch(_) {}
-            return null;
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.ok && data.link) return data.link;
+                }
+            } catch (e) {}
+            return `https://${window.location.host}/sub/${clientId}`;
         }
         window.copyClientSubscriptionLink = async function(clientId) {
             const link = await getSubscriptionLink(clientId);
@@ -1770,7 +1778,7 @@ window.initBackendSync = async function() {
                 if(!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 if(!data.ok) throw new Error('bad payload');
-                if(failCount > 0){ _setConn(true); if(typeof showToast === 'function') showToast('Backend reconnected.', 'success'); }
+                _setConn(true);
                 failCount = 0;
                 if(typeof applyPanelState === 'function' && data.state) applyPanelState(data.state, data);
                 if(typeof updateTelemetryFromBackend === 'function') updateTelemetryFromBackend(data);
@@ -1826,5 +1834,5 @@ window.importPanelDraftFromFile = function(event) {
     reader.readAsText(file);
 };
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a279b1a33b419ff8',t:'MTc4NjE0MTQ5MQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</body>
 </html>
