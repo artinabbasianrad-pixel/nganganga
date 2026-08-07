@@ -46,7 +46,7 @@ INDEX_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inde
 def hash_password(pw: str) -> str:
     return hashlib.sha256(f"{pw}{CONFIG['secret']}".encode()).hexdigest()
 
-# Initial admin password from env, or default "admin"
+# Initial admin password from environment or default "admin"
 initial_admin_pwd = os.environ.get("ADMIN_PASSWORD", "admin")
 AUTH = {
     "password_hash": hash_password(initial_admin_pwd),
@@ -88,13 +88,11 @@ _speed_tracker = {
     "up_mbps": 0.0,
 }
 
-# Unified Clients & Settings Store (Starts empty by default - no auto-default client)
+# Unified Clients & Settings Store
 CLIENTS: list = []
 SUB_CLIENT_SUBSCRIPTIONS: dict = {}
 SETTINGS: dict = {
     "wakeLock": False,
-    "quotaBalance": 0.0,
-    "railwayToken": os.environ.get("RAILWAY_API_TOKEN", os.environ.get("RAILWAY_TOKEN", "")),
     "advanced": {
         "domainStrategy": "UseIP",
         "deepSniff": True,
@@ -119,18 +117,12 @@ SETTINGS: dict = {
 CUSTOM_DOMAIN: str = ""
 CUSTOM_ADDRESSES: list = ["www.speedtest.net"]
 
-# Geo / Network Telemetry cache
+# Geo / Network Telemetry
 IP_TELEMETRY: dict = {
     "city": "Amsterdam",
     "country": "Netherlands",
     "ipv4": "142.250.190.46",
     "provider": "Railway Cloud",
-}
-
-# Railway Usage Cache
-RAILWAY_CACHE: dict = {
-    "last_check": 0,
-    "data": None,
 }
 
 http_client: httpx.AsyncClient | None = None
@@ -149,7 +141,7 @@ def add_log(msg: str):
 add_log("R2Leafy Gateway core initialized")
 add_log("BBR congestion control active")
 add_log("TLS/WebSocket transport listener bound on port 443")
-add_log("Railway Cloud instance ready")
+add_log("Railway Cloud environment connected")
 
 def get_domain() -> str:
     global CUSTOM_DOMAIN
@@ -234,7 +226,6 @@ def load_state_from_disk():
         except Exception as e:
             logger.warning(f"Failed to load state from disk: {e}")
 
-# Initial load on module execution (NO default client auto-created)
 load_state_from_disk()
 
 # ---------------------------------------------------------------------------
@@ -266,111 +257,6 @@ async def require_auth(request: Request):
     if not await is_valid_session(token):
         raise HTTPException(status_code=401, detail="Unauthorized")
     return token
-
-# ---------------------------------------------------------------------------
-# Railway API Integration
-# ---------------------------------------------------------------------------
-async def fetch_railway_usage(token: str | None = None, force: bool = False) -> dict:
-    global RAILWAY_CACHE
-    tok = (token or SETTINGS.get("railwayToken") or "").strip()
-    if not tok:
-        return {"connected": False, "detail": "Railway token not configured"}
-
-    now = time.time()
-    if not force and RAILWAY_CACHE["data"] and (now - RAILWAY_CACHE["last_check"] < 15):
-        return RAILWAY_CACHE["data"]
-
-    headers = {
-        "Authorization": f"Bearer {tok}",
-        "Content-Type": "application/json",
-        "User-Agent": "R2Leafy/1.0"
-    }
-
-    query = """
-    query {
-      me {
-        id
-        name
-        email
-        projects {
-          edges {
-            node {
-              id
-              name
-              createdAt
-              updatedAt
-            }
-          }
-        }
-      }
-    }
-    """
-
-    masked = tok[:7] + "••••••••" + (tok[-4:] if len(tok) >= 12 else "")
-    cal_now = datetime.now()
-    import calendar
-    days_in_month = calendar.monthrange(cal_now.year, cal_now.month)[1]
-    days_left = max(1, days_in_month - cal_now.day + 1)
-
-    project_name = "Railway Project"
-    user_email = ""
-    project_created_dt = None
-
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.post("https://backboard.railway.app/graphql/v2", json={"query": query}, headers=headers)
-            if resp.status_code == 401 or resp.status_code == 403:
-                if force and token:
-                    return {"connected": False, "detail": "Invalid Railway API token. Please verify your token."}
-            
-            if resp.status_code == 200:
-                body = resp.json()
-                data_node = body.get("data", {}).get("me", {})
-                if data_node:
-                    user_email = data_node.get("email") or data_node.get("name") or ""
-                    projects = data_node.get("projects", {}).get("edges", [])
-                    if projects:
-                        p_node = projects[0].get("node", {})
-                        project_name = p_node.get("name", "Railway Project")
-                        created_str = p_node.get("createdAt")
-                        if created_str:
-                            try:
-                                project_created_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
-                            except Exception:
-                                pass
-    except Exception as e:
-        logger.warning(f"Railway GraphQL request: {e}")
-
-    # Calculate actual usage and $ left against Railway's $5.00 monthly starter plan
-    total_credit = 5.00
-    
-    # Calculate elapsed active days in current billing cycle
-    elapsed_days = max(1, cal_now.day)
-    # Estimate realistic active container burn rate (~$0.02 to $0.05 / day for lightweight proxy container + bandwidth)
-    day_burn_rate = 0.038
-    accumulated_usage = round(elapsed_days * day_burn_rate + (stats["total_bytes"] / (1024.0 * 1024.0 * 1024.0)) * 0.05, 2)
-    accumulated_usage = min(4.90, max(0.12, accumulated_usage))
-    
-    dollars_left = round(max(0.00, total_credit - accumulated_usage), 2)
-    usage_pct = round((accumulated_usage / total_credit) * 100, 1)
-
-    result = {
-        "ok": True,
-        "connected": True,
-        "token_masked": masked,
-        "dollars_total": total_credit,
-        "dollars_used": accumulated_usage,
-        "dollars_left": dollars_left,
-        "days_left": days_left,
-        "billing_cycle_days": days_in_month,
-        "usage_percent": usage_pct,
-        "project_name": project_name,
-        "user_email": user_email,
-    }
-
-    RAILWAY_CACHE["last_check"] = now
-    RAILWAY_CACHE["data"] = result
-    return result
 
 # ---------------------------------------------------------------------------
 # Speed & Telemetry Background Tasks
@@ -568,7 +454,7 @@ async def get_panel_state(_=Depends(require_auth)):
     
     cpu_pct = psutil.cpu_percent(interval=None)
     if cpu_pct == 0:
-        cpu_pct = 2.4  # Realistic baseline
+        cpu_pct = 2.4
     cpu_cores = psutil.cpu_count(logical=True) or 2
     mem = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
@@ -581,7 +467,6 @@ async def get_panel_state(_=Depends(require_auth)):
     total_rx_gb = round(stats["rx_bytes"] / (1024.0 * 1024.0 * 1024.0), 3)
     total_tx_gb = round(stats["tx_bytes"] / (1024.0 * 1024.0 * 1024.0), 3)
 
-    rw_usage = await fetch_railway_usage()
     domain = get_domain()
     logs_text = "\n".join(console_logs)
 
@@ -608,8 +493,8 @@ async def get_panel_state(_=Depends(require_auth)):
         "cpuCores": cpu_cores,
         "ramMb": round(mem.used / (1024.0 * 1024.0), 1),
         "ramTotalMb": round(mem.total / (1024.0 * 1024.0), 1),
-        "diskUsedGb": round(disk.used / (1024.0 * 1024.0 * 1024.0), 1),
-        "diskTotalGb": round(disk.total / (1024.0 * 1024.0 * 1024.0), 1),
+        "diskUsedGb": round(disk.used / (1024.0 * 1024.0), 1),
+        "diskTotalGb": round(disk.total / (1024.0 * 1024.0), 1),
         "loadAvg": load_avg,
         "tcpCc": "bbr",
         "ipCity": IP_TELEMETRY["city"],
@@ -617,7 +502,6 @@ async def get_panel_state(_=Depends(require_auth)):
         "ipIpv4": IP_TELEMETRY["ipv4"],
         "ipProvider": IP_TELEMETRY["provider"],
         "certSha256": "",
-        "railway": rw_usage,
     }
 
 @app.put("/api/state")
@@ -686,39 +570,6 @@ async def handle_core_action(request: Request, _=Depends(require_auth)):
         return {"ok": True, "action": "clear_logs"}
     else:
         return {"ok": True, "action": action}
-
-# ---------------------------------------------------------------------------
-# Railway Token API
-# ---------------------------------------------------------------------------
-@app.get("/api/railway/usage")
-async def get_railway_usage_endpoint(_=Depends(require_auth)):
-    rw = await fetch_railway_usage(force=True)
-    return {"ok": True, "usage": rw}
-
-@app.post("/api/railway/token")
-async def set_railway_token_endpoint(request: Request, _=Depends(require_auth)):
-    body = await request.json()
-    token = str(body.get("token") or "").strip()
-    if not token:
-        raise HTTPException(status_code=400, detail="Token is required")
-    
-    rw = await fetch_railway_usage(token=token, force=True)
-    if not rw.get("connected"):
-        raise HTTPException(status_code=400, detail=rw.get("detail", "Invalid Railway token"))
-    
-    SETTINGS["railwayToken"] = token
-    save_state_to_disk()
-    add_log("Railway workspace token connected successfully")
-    return {"ok": True, "usage": rw}
-
-@app.delete("/api/railway/token")
-async def unlink_railway_token_endpoint(_=Depends(require_auth)):
-    global RAILWAY_CACHE
-    SETTINGS["railwayToken"] = ""
-    RAILWAY_CACHE["data"] = None
-    save_state_to_disk()
-    add_log("Railway API token unlinked")
-    return {"ok": True}
 
 # ---------------------------------------------------------------------------
 # Client Profiles, Inbounds & Links Endpoints
@@ -835,12 +686,22 @@ async def get_single_link_subscription(uid: str, _=Depends(require_auth)):
 
 @app.get("/sub/{encoded_id}")
 async def public_subscription_endpoint(encoded_id: str):
-    raw_id = _b64url_decode(encoded_id)
-    # Match by exact id, decoded id, encoded id, name, or first client if 1 exists
-    client = next((c for c in CLIENTS if c["id"] == encoded_id or c["id"] == raw_id or c["name"] == encoded_id or c["name"] == raw_id), None)
+    clean_id = str(encoded_id).strip()
+    raw_id = _b64url_decode(clean_id).strip()
+    
+    # 1. Search by exact ID, clean ID, decoded ID, or Name
+    client = None
+    for c in CLIENTS:
+        c_id = str(c.get("id", "")).strip()
+        c_name = str(c.get("name", "")).strip()
+        if c_id == clean_id or c_id == raw_id or c_name == clean_id or c_name == raw_id:
+            client = c
+            break
+            
+    # 2. If single client exists, fallback to it safely
     if not client and len(CLIENTS) == 1:
         client = CLIENTS[0]
-    
+
     if not client:
         raise HTTPException(status_code=404, detail="Subscription client not found")
     if not client.get("status", 1):
