@@ -153,11 +153,15 @@
         .modal-footer { padding: 18px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 12px; flex-shrink: 0; background: rgba(255,255,255,0.01); border-radius: 0 0 var(--radius-md) var(--radius-md); }
         
         .chart-wrapper { position: relative; width: 100%; height: 100%; min-height: 0; min-width: 0; flex: 1; display: flex; align-items: center; justify-content: center; }
-        .map-container { width: 100%; height: 160px; background: var(--bg-base); position: relative; overflow: hidden; display: flex; justify-content: center; align-items: center; border-bottom: 1px solid var(--border); background-image: radial-gradient(rgba(139, 92, 246, 0.15) 1px, transparent 1px); background-size: 20px 20px; flex-shrink: 0; }
+        .map-container { width: 100%; height: 160px; background: #09090b; position: relative; overflow: hidden; display: flex; justify-content: center; align-items: center; border-bottom: 1px solid var(--border); background-image: radial-gradient(rgba(139, 92, 246, 0.2) 1px, transparent 1px); background-size: 20px 20px; flex-shrink: 0; }
         @keyframes sweep { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        @keyframes pulseDot { 0% { transform: scale(1); box-shadow: 0 0 10px var(--accent); } 50% { transform: scale(1.5); box-shadow: 0 0 25px var(--accent); } 100% { transform: scale(1); box-shadow: 0 0 10px var(--accent); } }
-        .radar-sweep { position: absolute; width: 300px; height: 300px; border-radius: 50%; background: conic-gradient(from 0deg, rgba(139, 92, 246, 0) 65%, rgba(139, 92, 246, 0.4) 100%); animation: sweep 3s linear infinite; }
-        .map-dot { position: absolute; width: 6px; height: 6px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 10px var(--accent); animation: pulseDot 2s infinite; z-index: 2; }
+        @keyframes pulseDot { 0% { transform: scale(1); box-shadow: 0 0 14px #8b5cf6; } 50% { transform: scale(1.6); box-shadow: 0 0 28px #a78bfa, 0 0 45px rgba(139, 92, 246, 0.85); } 100% { transform: scale(1); box-shadow: 0 0 14px #8b5cf6; } }
+        .radar-ring { position: absolute; border-radius: 50%; border: 1px solid rgba(139, 92, 246, 0.25); pointer-events: none; }
+        .radar-ring-1 { width: 50px; height: 50px; }
+        .radar-ring-2 { width: 100px; height: 100px; border-style: dashed; }
+        .radar-ring-3 { width: 150px; height: 150px; }
+        .radar-sweep { position: absolute; width: 300px; height: 300px; border-radius: 50%; background: conic-gradient(from 0deg, rgba(139, 92, 246, 0) 55%, rgba(139, 92, 246, 0.45) 85%, #8b5cf6 100%); animation: sweep 3s linear infinite; pointer-events: none; }
+        .map-dot { position: absolute; width: 8px; height: 8px; background: #8b5cf6; border-radius: 50%; box-shadow: 0 0 16px #8b5cf6, 0 0 30px rgba(139, 92, 246, 0.9); animation: pulseDot 2s infinite; z-index: 2; }
         
         .terminal { background: #050505; color: #a1a1aa; padding: 20px; font-size: 0.8rem; line-height: 1.6; flex: 1; overflow-y: auto; border-radius: 0 0 var(--radius-md) var(--radius-md); user-select: text; white-space: pre-wrap; font-family: 'JetBrains Mono', monospace; }
         
@@ -357,7 +361,7 @@
                         </div>
                         <div class="panel-body-unpadded" style="flex:1; display:flex; flex-direction:column;">
                             <div class="map-container" style="height: 140px;">
-                                <div class="radar-sweep"></div><div class="map-dot"></div>
+                                <div class="radar-ring radar-ring-1"></div><div class="radar-ring radar-ring-2"></div><div class="radar-ring radar-ring-3"></div><div class="radar-sweep"></div><div class="map-dot"></div>
                             </div>
                             <div style="padding:20px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; flex:1;">
                                 <div style="background:var(--bg-hover); border:1px solid var(--border); border-radius:8px; padding:12px;">
@@ -1345,12 +1349,33 @@
             showToast('Config copied!', 'success');
         };
 
-        window.saveSubscriptionForClient = function() {
+        window.saveSubscriptionForClient = async function() {
             const clientId = document.getElementById('sub-client').value;
             if(!clientId) return showToast('Select a client first', 'error');
             subClientSubscriptions[clientId] = JSON.parse(JSON.stringify(subEntries));
-            pushPanelState('saveSub');
-            showToast('Subscription Configuration Saved!', 'success');
+            window.renderSubPreview();
+            showToast('Saving subscription configuration...', 'info');
+            try {
+                const res = await fetch('/api/state', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        state: {
+                            clients: window.clients,
+                            subClientSubscriptions: window.subClientSubscriptions,
+                            settings: window.serializePanelState().settings
+                        },
+                        reason: 'saveSub'
+                    })
+                });
+                if(res.ok) {
+                    showToast('Subscription Configuration Saved & Synced!', 'success');
+                } else {
+                    showToast('Server error saving subscription', 'error');
+                }
+            } catch(e) {
+                showToast('Network error saving subscription', 'error');
+            }
         };
 
         window.saveAdvancedRules = function() { pushPanelState('saveAdvancedRules'); showToast('Settings Saved', 'success'); }
@@ -1469,5 +1494,5 @@ window.importPanelDraftFromFile = function(event) {
     reader.readAsText(file);
 };
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a279f39e7f1366c8',t:'MTc4NjE0NDE5NA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a279f704ce3566c8',t:'MTc4NjE0NDMzMw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
