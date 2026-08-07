@@ -46,7 +46,7 @@ INDEX_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inde
 def hash_password(pw: str) -> str:
     return hashlib.sha256(f"{pw}{CONFIG['secret']}".encode()).hexdigest()
 
-# Check if admin password was explicitly set in environment
+# Initial admin password: if not set in environment or equals empty, first startup will prompt Setup Password
 env_admin_pwd = os.environ.get("ADMIN_PASSWORD", "")
 AUTH = {
     "password_hash": hash_password(env_admin_pwd) if env_admin_pwd else "",
@@ -88,7 +88,7 @@ _speed_tracker = {
     "up_mbps": 0.0,
 }
 
-# Unified Clients & Settings Store
+# Unified Clients & Settings Store (Starts with 0 clients - no auto Default client)
 CLIENTS: list = []
 SUB_CLIENT_SUBSCRIPTIONS: dict = {}
 SETTINGS: dict = {
@@ -116,7 +116,7 @@ SETTINGS: dict = {
 CUSTOM_DOMAIN: str = ""
 CUSTOM_ADDRESSES: list = ["www.speedtest.net"]
 
-# Geo / Network Telemetry (Populated dynamically on startup)
+# Geo / Network Telemetry (Populated dynamically on startup with real IP lookup)
 IP_TELEMETRY: dict = {
     "city": "Amsterdam",
     "country": "Netherlands",
@@ -126,6 +126,154 @@ IP_TELEMETRY: dict = {
 
 http_client: httpx.AsyncClient | None = None
 core_running: bool = True
+
+
+SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subscription Profile</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><path fill='%2310b981' d='M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z'/></svg>" />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        :root { --bg-base: #09090b; --bg-panel: #121214; --bg-hover: #1f1f22; --border: rgba(255,255,255,0.08); --border-hover: rgba(255,255,255,0.15); --text-main: #fafafa; --text-muted: #a1a1aa; --accent: #10b981; --accent-hover: #059669; --accent-bg: rgba(16,185,129,0.12); --danger: #ef4444; --warning: #f59e0b; --success: #10b981; --info: #3b82f6; --purple: #8b5cf6; --radius-md: 16px; --radius-sm: 10px; }
+        * { margin: 0; padding: 0; box-sizing: border-box; outline: none; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+        ::selection { background: rgba(16, 185, 129, 0.3); color: #fff; }
+        input, textarea, select, .mono, pre, code, #log-output, td, .form-label, th, p { user-select: text !important; -webkit-user-select: text !important; }
+        body { background: var(--bg-base); color: var(--text-main); font-family: 'Plus Jakarta Sans', sans-serif; margin: 0; padding: 24px 16px; display: flex; justify-content: center; min-height: 100vh; box-sizing: border-box; }
+        .container { max-width: 480px; width: 100%; display: flex; flex-direction: column; gap: 20px; padding-bottom: 30px; }
+        .card { background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 24px; box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
+        .card-title { margin: 0 0 16px 0; font-size: 1.15rem; font-weight: 800; display: flex; align-items: center; gap: 10px; }
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .stat-box { background: var(--bg-base); border: 1px solid var(--border); padding: 14px; border-radius: var(--radius-sm); }
+        .stat-label { font-size: 0.75rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.05em; }
+        .stat-val { font-size: 1.15rem; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+        .tag { padding: 4px 12px; border-radius: 8px; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
+        .btn { width: 100%; background: var(--bg-hover); color: var(--text-main); border: 1px solid var(--border); padding: 14px; border-radius: var(--radius-sm); font-size: 0.9rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; font-family: inherit; transition: all 0.2s ease; margin-top: 12px; }
+        .btn:hover { background: var(--border-hover); transform: translateY(-1px); }
+        .btn-primary { background: var(--accent); color: #000; border: none; box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
+        .btn-primary:hover { background: var(--accent-hover); color: #fff; }
+        .btn-icon { width: 40px; height: 40px; padding: 0; margin: 0; }
+        .link-item { background: var(--bg-base); border: 1px solid var(--border); padding: 14px; border-radius: var(--radius-sm); display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; transition: border-color 0.2s; }
+        .link-item:hover { border-color: var(--border-hover); }
+        .link-item-title { font-size: 0.9rem; font-weight: 700; margin-bottom: 4px; color: var(--text-main); }
+        .link-item-sub { font-size: 0.75rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+        .progress-bar { width: 100%; height: 8px; background: var(--bg-hover); border-radius: 4px; margin-top: 10px; overflow: hidden; }
+        .progress-fill { height: 100%; background: var(--success); border-radius: 4px; transition: width 0.3s ease; }
+        .progress-fill.warning { background: var(--warning); }
+        .progress-fill.danger { background: var(--danger); }
+        .qr-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); justify-content: center; align-items: center; z-index: 100; padding: 20px; animation: fadeIn 0.2s ease; }
+        .qr-modal.show { display: flex; }
+        .qr-card { background: #fff; padding: 24px; border-radius: var(--radius-md); text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.5); transform: translateY(0); transition: transform 0.3s; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        
+        .text-accent { color: var(--accent) !important; }
+        .text-info { color: var(--info) !important; }
+        .text-warning { color: var(--warning) !important; }
+        .text-purple { color: var(--purple) !important; }
+        
+        .import-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 12px; }
+        .btn-import { background: var(--bg-base); border: 1px solid var(--border); color: var(--text-main); text-decoration: none; padding: 14px 10px; border-radius: var(--radius-sm); font-size: 0.85rem; font-weight: 700; text-align: center; transition: all 0.2s; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+        .btn-import:hover { background: var(--bg-hover); border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(16,185,129,0.15); }
+        .btn-import i { font-size: 1.5rem; }
+        
+        .footer { text-align: center; margin-top: 20px; font-size: 0.8rem; color: var(--text-muted); font-weight: 600; }
+        .footer a { color: var(--text-muted); text-decoration: none; transition: color 0.2s; }
+        .footer a:hover { color: var(--text-main); }
+    </style>
+</head>
+<body>
+    <div class="container" id="app"></div>
+    <div class="qr-modal" id="qr-modal" onclick="this.classList.remove('show')">
+        <div class="qr-card" onclick="event.stopPropagation()">
+            <div id="qrcode" style="display:inline-block; padding:10px; border:4px solid #f0f0f0; border-radius:12px; background:#fff;"></div>
+            <button class="btn" style="margin-top:20px; background:#f4f4f5; color:#18181b; border:none;" onclick="document.getElementById('qr-modal').classList.remove('show')">Close QR</button>
+        </div>
+    </div>
+    <script>
+        const DATA = JSON.parse(atob('{{SUB_DATA_B64}}'));
+        function fmtGB(v){ return !v ? '∞' : v.toFixed(2)+' GB'; }
+        function fmtDate(d){ return !d ? 'Never' : new Date(d).toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}); }
+        function cp(t){ navigator.clipboard.writeText(t).then(()=>{ const el=document.createElement('div'); el.innerText='Copied!'; el.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--success);color:#fff;padding:10px 20px;border-radius:20px;font-weight:700;z-index:999;box-shadow:0 4px 12px rgba(16,185,129,0.3);'; document.body.appendChild(el); setTimeout(()=>el.remove(),2000); }); }
+        function qr(t){ document.getElementById('qrcode').innerHTML=''; new QRCode(document.getElementById('qrcode'),{text:t,width:220,height:220,colorDark:"#000000",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M}); document.getElementById('qr-modal').classList.add('show'); }
+        
+        function render(){
+            const u = DATA.client.usage||0; const l = DATA.client.limit||0; const p = l>0?Math.min(100,(u/l)*100):0;
+            const cls = p>90?'danger':(p>75?'warning':'');
+            const subUrl = encodeURIComponent(window.location.href);
+            const subName = encodeURIComponent(DATA.client.name);
+            const b64Url = btoa(window.location.href);
+            
+            document.getElementById('app').innerHTML = `
+                <div style="text-align:center; margin-bottom:8px;">
+                    <svg viewBox="0 0 496 512" fill="var(--accent)" style="width:52px; height:52px; margin-bottom:12px; filter:drop-shadow(0 0 12px var(--accent-bg));">
+                        <path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/>
+                    </svg>
+                    <h1 style="margin:0; font-size:1.8rem; font-weight:800; letter-spacing:-0.03em;">R2Leafy</h1>
+                    <p style="color:var(--text-muted); font-size:0.85rem; font-weight:600; margin-top:6px;">Subscription Environment</p>
+                </div>
+                
+                <div class="card">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                        <h2 class="card-title" style="margin:0;"><i class="fa-solid fa-user-shield text-accent"></i> ${DATA.client.name}</h2>
+                        <span class="tag" style="background:${DATA.client.status?'var(--success)':'var(--danger)'}20; color:${DATA.client.status?'var(--success)':'var(--danger)'};">${DATA.client.status?'ACTIVE':'OFFLINE'}</span>
+                    </div>
+                    <div class="stat-grid">
+                        <div class="stat-box"><div class="stat-label">Used Data</div><div class="stat-val">${u>0?u.toFixed(2):'0'} GB</div></div>
+                        <div class="stat-box"><div class="stat-label">Total Quota</div><div class="stat-val">${fmtGB(l)}</div></div>
+                        <div class="stat-box" style="grid-column:1/-1;">
+                            <div style="display:flex; justify-content:space-between; align-items:center;"><span class="stat-label" style="margin:0;">Consumption</span><span style="font-size:0.8rem; font-weight:800;">${p.toFixed(1)}%</span></div>
+                            <div class="progress-bar"><div class="progress-fill ${cls}" style="width:${p}%"></div></div>
+                        </div>
+                        <div class="stat-box"><div class="stat-label">Expiry</div><div class="stat-val" style="font-size:0.95rem;">${fmtDate(DATA.client.expiry)}</div></div>
+                        <div class="stat-box"><div class="stat-label">Remaining</div><div class="stat-val" style="font-size:0.95rem;">${l?fmtGB(Math.max(0,l-u)):'∞'}</div></div>
+                    </div>
+                    <button class="btn btn-primary" style="margin-top:20px;" onclick="cp(window.location.href)"><i class="fa-solid fa-link"></i> Copy Subscription Link</button>
+                    
+                    <div style="margin-top:24px;">
+                        <h3 style="font-size:0.9rem; font-weight:800; color:var(--text-main); margin:0 0 10px 0;"><i class="fa-solid fa-bolt text-warning"></i> One-Click Import</h3>
+                        <div class="import-grid">
+                            <a href="v2rayng://install-sub?url=${subUrl}&name=${subName}" class="btn-import"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="26" height="26" style="color:var(--accent);"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="12" d="M22 39.005h40.738v113.99L170 39.005"/></svg> v2rayNG</a>
+                            <a href="hiddify://install-sub?url=${subUrl}&name=${subName}" class="btn-import"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="26" height="26" style="color:var(--info);"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M33.578 19.376h8.146c.43 0 .776.346.776.777v19.785c0 .43-.346.777-.776.777h-8.146a.775.775 0 0 1-.776-.774V20.153c0-.43.346-.777.776-.777m8.146-12.091c.43 0 .776.347.776.777v8.359c0 .43-.346.777-.776.777h-8.146a.775.775 0 0 1-.776-.774v-3.769zM28.06 15.31c.43 0 .776.347.776.778v23.85c0 .43-.346.777-.776.777h-8.146a.775.775 0 0 1-.776-.774V20.68zm-13.638 8.15c.43 0 .776.347.776.778v15.7c0 .43-.346.777-.776.777H6.276a.775.775 0 0 1-.776-.777V28.83zm.777 11.419h3.94"/></svg> Hiddify</a>
+                            <a href="shadowrocket://add/sub://${b64Url}?title=${subName}" class="btn-import"><i class="fa-solid fa-rocket text-warning"></i> Shadowrocket</a>
+                            <a href="sing-box://import-remote-profile?url=${subUrl}&name=${subName}" class="btn-import"><i class="fa-solid fa-box text-purple"></i> Sing-Box</a>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h2 class="card-title"><i class="fa-solid fa-network-wired text-accent"></i> Core Configurations</h2>
+                    <button class="btn" style="margin-bottom:20px; background:var(--accent-bg); color:var(--accent); border:none;" onclick="cp(DATA.links.join('\\n'))"><i class="fa-solid fa-copy"></i> Copy All Configs</button>
+                    <div style="display:flex; flex-direction:column;">
+                        ${DATA.links.map((lnk,i)=>{
+                            let n = 'Node '+(i+1); try{n=decodeURIComponent(lnk.split('#')[1]||n);}catch(e){}
+                            return `<div class="link-item">
+                                <div style="min-width:0; flex:1; padding-right:16px;">
+                                    <div class="link-item-title">${n}</div>
+                                    <div class="link-item-sub">${lnk.substring(0,32)}...</div>
+                                </div>
+                                <div style="display:flex; gap:8px;">
+                                    <button class="btn btn-icon" onclick="qr('${lnk}')"><i class="fa-solid fa-qrcode"></i></button>
+                                    <button class="btn btn-icon" onclick="cp('${lnk}')"><i class="fa-solid fa-copy"></i></button>
+                                </div>
+                            </div>`;
+                        }).join('')}
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    Powered by <a href="https://github.com/Code-Leafy/R2Leafy" target="_blank"><i class="fa-brands fa-github"></i> R2Leafy</a>
+                </div>
+            `;
+        }
+        render();
+    </script>
+</body>
+</html>"""
+
 
 # ---------------------------------------------------------------------------
 # Logging & Helper Functions
@@ -302,7 +450,6 @@ async def ip_lookup_task():
                     elif "org" in data:
                         IP_TELEMETRY["provider"] = data.get("org")
 
-                    # If city was found, exit early
                     if IP_TELEMETRY.get("city") and IP_TELEMETRY.get("ipv4") != "127.0.0.1":
                         add_log(f"Public IP resolved: {IP_TELEMETRY['ipv4']} ({IP_TELEMETRY['city']}, {IP_TELEMETRY['country']})")
                         break
@@ -671,102 +818,6 @@ def _b64url_decode(s: str) -> str:
     except Exception:
         return s
 
-def render_subscription_html(client: dict, sub_links: list, raw_sub_url: str) -> str:
-    domain = get_domain()
-    used_mb = round(client.get("used_bytes", 0) / (1024.0 * 1024.0), 2)
-    limit_gb = client.get("limit", 0)
-    limit_str = f"{limit_gb:.1f} GB" if limit_gb > 0 else "Unlimited"
-    expiry_str = client.get("expiry")[:10] if client.get("expiry") else "Never"
-    status_str = "Active" if client.get("status", 1) else "Disabled"
-
-    node_cards_html = ""
-    for i, link in enumerate(sub_links):
-        node_name = f"Node {i+1}" if i > 0 else "Direct Gateway"
-        node_cards_html += f"""
-        <div style="background:#18181b; border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:12px 16px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
-            <div>
-                <div style="font-weight:700; font-size:0.9rem; color:#fff;">{node_name}</div>
-                <div style="font-size:0.75rem; color:#71717a; font-family:monospace; margin-top:2px;">{domain}:443 (VLESS + TLS + WS)</div>
-            </div>
-            <button onclick="navigator.clipboard.writeText('{link}'); alert('Node link copied!');" style="background:#10b981; color:#fff; border:none; padding:6px 14px; border-radius:6px; font-size:0.75rem; font-weight:600; cursor:pointer;">Copy</button>
-        </div>
-        """
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2Leafy Subscription | {client['name']}</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <style>
-        * {{ margin:0; padding:0; box-sizing:border-box; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; }}
-        body {{ background:#09090b; color:#fafafa; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }}
-        .card {{ background:#111113; border:1px solid rgba(255,255,255,0.08); border-radius:16px; width:100%; max-width:480px; padding:24px; box-shadow:0 20px 40px rgba(0,0,0,0.6); }}
-        .badge {{ display:inline-block; padding:3px 8px; border-radius:6px; font-size:0.75rem; font-weight:700; background:rgba(16,185,129,0.12); color:#10b981; }}
-        .btn {{ width:100%; padding:12px; border-radius:8px; border:none; background:#10b981; color:#fff; font-weight:700; font-size:0.9rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px; }}
-        .btn:hover {{ opacity:0.9; }}
-        .grid {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:16px 0; }}
-        .stat-box {{ background:#18181b; border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:12px; }}
-        .stat-label {{ font-size:0.75rem; color:#71717a; margin-bottom:4px; }}
-        .stat-val {{ font-size:0.95rem; font-weight:700; font-family:monospace; color:#fff; }}
-        #qrcode {{ background:#fff; padding:12px; border-radius:10px; display:inline-block; margin:16px auto; }}
-        #qrcode img {{ display:block; }}
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:16px;">
-            <div style="display:flex; align-items:center; gap:10px;">
-                <span style="font-size:1.4rem;">🍃</span>
-                <div>
-                    <div style="font-weight:800; font-size:1.1rem; color:#fff;">{client['name']}</div>
-                    <div style="font-size:0.75rem; color:#71717a;">R2Leafy Profile</div>
-                </div>
-            </div>
-            <span class="badge">{status_str}</span>
-        </div>
-
-        <div style="text-align:center; margin:16px 0 8px;">
-            <div id="qrcode"></div>
-            <div style="font-size:0.75rem; color:#71717a;">Scan with v2rayNG, Shadowrocket, or Sing-Box</div>
-        </div>
-
-        <div class="grid">
-            <div class="stat-box">
-                <div class="stat-label">Data Traffic</div>
-                <div class="stat-val">{used_mb} MB / {limit_str}</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-label">Expiry Date</div>
-                <div class="stat-val">{expiry_str}</div>
-            </div>
-        </div>
-
-        <button class="btn" onclick="navigator.clipboard.writeText('{raw_sub_url}'); alert('Subscription Link Copied!');" style="margin-bottom:16px;">
-            <i class="fa-solid fa-copy"></i> Copy Subscription Link
-        </button>
-
-        <div style="font-size:0.8rem; font-weight:700; color:#a1a1aa; margin-bottom:10px;">Available Proxy Nodes:</div>
-        {node_cards_html}
-
-        <div style="text-align:center; margin-top:20px; font-size:0.75rem; color:#52525b;">
-            Powered by R2Leafy Gateway
-        </div>
-    </div>
-
-    <script>
-        new QRCode(document.getElementById("qrcode"), {{
-            text: "{raw_sub_url}",
-            width: 180,
-            height: 180,
-            correctLevel: QRCode.CorrectLevel.M
-        }});
-    </script>
-</body>
-</html>"""
-
 @app.get("/api/sub/link/{client_id}")
 async def get_subscription_link_url(client_id: str):
     domain = get_domain()
@@ -821,7 +872,6 @@ async def public_subscription_endpoint(encoded_id: str, request: Request):
 
     sub_content = "\n".join(sub_links)
     encoded_payload = base64.b64encode(sub_content.encode()).decode()
-    raw_sub_url = f"https://{main_domain}/sub/{client['id']}"
 
     # If accessed from browser (HTML), render subscription landing page
     accept_header = request.headers.get("accept", "").lower()
@@ -829,7 +879,19 @@ async def public_subscription_endpoint(encoded_id: str, request: Request):
     is_browser = ("text/html" in accept_header or "mozilla" in user_agent) and "raw" not in request.query_params
 
     if is_browser:
-        html_page = render_subscription_html(client, sub_links, raw_sub_url)
+        data_obj = {
+            "client": {
+                "id": client["id"],
+                "name": client["name"],
+                "usage": round(client.get("used_bytes", 0) / (1024.0 * 1024.0 * 1024.0), 3),
+                "limit": client.get("limit", 0),
+                "expiry": client.get("expiry", ""),
+                "status": client.get("status", 1)
+            },
+            "links": sub_links
+        }
+        b64_json = base64.b64encode(json.dumps(data_obj).encode()).decode()
+        html_page = SUB_HTML_TEMPLATE.replace("{{SUB_DATA_B64}}", b64_json)
         return HTMLResponse(content=html_page)
 
     headers = {
