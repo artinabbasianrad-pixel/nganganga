@@ -377,10 +377,7 @@
                                     <div id="cs-provider" style="font-weight:700; font-size:0.9rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Railway Cloud</div>
                                 </div>
                             </div>
-                            <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border); padding:16px 20px; margin-top:auto;">
-                                <div><div style="font-weight:700; font-size:0.85rem;">Wake Lock</div><div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Prevents container suspension.</div></div>
-                                <label class="switch"><input type="checkbox" id="wake-lock-toggle" onchange="window.toggleWakeLock(this)"><span class="slider"></span></label>
-                            </div>
+
                         </div>
                     </div>
                     
@@ -1047,7 +1044,6 @@
             return {
                 clients, subClientSubscriptions,
                 settings: {
-                    wakeLock: document.getElementById('wake-lock-toggle')?.checked || false,
                     advanced: {
                         domainStrategy: document.getElementById('adv-domain-strategy')?.value || 'UseIP',
                         deepSniff: document.getElementById('adv-deep-sniff')?.checked !== false,
@@ -1107,21 +1103,7 @@
             if(backendSync._queued) { backendSync._queued = false; setTimeout(() => pushPanelState('sync'), 50); }
         };
 
-        window.toggleWakeLock = function(el) {
-            if(el.checked) {
-                el.checked = false; 
-                window.customConfirm("Use at your own risk. Your account might get suspended. Proceed?", (res) => {
-                    if(res) {
-                        el.checked = true;
-                        showToast('Wake Lock Enabled.', 'warning');
-                        window.schedulePanelSync('wakeLock');
-                    }
-                });
-            } else {
-                showToast('Wake Lock Disabled.', 'info');
-                window.schedulePanelSync('wakeLock');
-            }
-        };
+
 
         function renderClients() {
             const tb = document.querySelector('#tbl-clients tbody');
@@ -1487,5 +1469,5 @@ window.importPanelDraftFromFile = function(event) {
     reader.readAsText(file);
 };
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a279cf4adb008ed2',t:'MTc4NjE0MjcwNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a279d7d9ea208ed2',t:'MTc4NjE0MzA1Ng=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
