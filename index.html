@@ -696,8 +696,16 @@
             if(p1 !== p2) return showToast('Passwords do not match', 'error');
             fetch('/api/setup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pass: p1}) })
                 .then(r=>r.json()).then(d=>{
-                if(d.ok) { document.getElementById('loader').style.opacity = '1'; document.getElementById('loader').style.visibility = 'visible'; setTimeout(() => location.reload(), 300); } 
-                else { showToast('Setup failed', 'error'); }
+                if(d.ok) {
+                    const overlay = document.getElementById('auth-overlay');
+                    if(overlay) overlay.style.display = 'none';
+                    showToast('Password setup successful!', 'success');
+                    ensureCharts();
+                    if(window.initBackendSync) window.initBackendSync();
+                    setTimeout(() => location.reload(), 400);
+                } else {
+                    showToast('Setup failed: ' + (d.detail || 'check inputs'), 'error');
+                }
             }).catch(()=>showToast('Network error', 'error'));
         };
 
@@ -706,8 +714,16 @@
             if(!p) return showToast('Enter a password', 'error');
             fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pass: p}) })
                 .then(r=>r.json()).then(d=>{
-                if(d.ok) { document.getElementById('loader').style.opacity = '1'; document.getElementById('loader').style.visibility = 'visible'; setTimeout(() => location.reload(), 300); } 
-                else { showToast('Incorrect password', 'error'); }
+                if(d.ok) {
+                    const overlay = document.getElementById('auth-overlay');
+                    if(overlay) overlay.style.display = 'none';
+                    showToast('Login successful!', 'success');
+                    ensureCharts();
+                    if(window.initBackendSync) window.initBackendSync();
+                    setTimeout(() => location.reload(), 400);
+                } else {
+                    showToast('Incorrect password', 'error');
+                }
             }).catch(()=>showToast('Network error', 'error'));
         };
 
@@ -720,6 +736,16 @@
         window.lastTelemetry = {}; window.PORT_DOMAIN = ''; window.WEB_DOMAIN = '';
         
         const backendSync = { connected: false, syncing: false, debounceHandle: null };
+
+        
+        function showAuthRequired() {
+            const overlay = document.getElementById('auth-overlay');
+            if (overlay) {
+                overlay.style.display = 'flex';
+                const title = document.getElementById('auth-title');
+                if (title) title.innerHTML = '<i class="fa-solid fa-lock text-accent"></i> Authentication Required';
+            }
+        }
 
         let confirmCallback = null;
         window.customConfirm = function(msg, cb) {
@@ -1058,7 +1084,7 @@
                     method: 'PUT', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ state: serializePanelState(), reason })
                 });
-                if(res.status === 401) { location.reload(); return; }
+                if(res.status === 401) { showAuthRequired(); return; }
                 const data = await res.json();
                 if(!data.ok) throw new Error(data.error || 'state sync failed');
                 
@@ -1350,7 +1376,7 @@
         window.backupPanel = async function() {
             try {
                 const res = await fetch('/api/backup', { method: 'POST' });
-                if(res.status === 401) { location.reload(); return; }
+                if(res.status === 401) { showAuthRequired(); return; }
                 const data = await res.json();
                 if(data.ok) showToast('Backup saved: ' + data.file, 'success');
                 else showToast('Backup failed', 'error');
@@ -1362,7 +1388,7 @@
             if(!preview) return;
             try {
                 const res = await fetch('/api/config');
-                if(res.status === 401) { location.reload(); return; }
+                if(res.status === 401) { showAuthRequired(); return; }
                 if(!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 preview.value = (data.ok && data.config) ? JSON.stringify(data.config, null, 2)
@@ -1374,15 +1400,18 @@
 
         window.onload = () => {
             setTimeout(() => {
-                document.getElementById('loader').style.opacity = '0';
-                setTimeout(() => {
-                    document.getElementById('loader').style.visibility = 'hidden';
-                    ensureCharts();
-                    window.filterLogs();
-                    window.refreshConfigPreview();
-                }, 400);
-            }, 300);
-            if(window.initBackendSync) window.initBackendSync();
+                const loader = document.getElementById('loader');
+                if(loader) {
+                    loader.style.opacity = '0';
+                    setTimeout(() => { loader.style.visibility = 'hidden'; }, 300);
+                }
+                ensureCharts();
+                if(typeof window.filterLogs === 'function') window.filterLogs();
+                if(loggedIn && passSetup) {
+                    if(typeof window.refreshConfigPreview === 'function') window.refreshConfigPreview();
+                    if(window.initBackendSync) window.initBackendSync();
+                }
+            }, 200);
         };
     </script>
     <script>
@@ -1391,15 +1420,14 @@ function _setConn(ok) { backendSync.connected = ok; }
 window.initBackendSync = async function() {
     let lastLogLine = "";
     let failCount = 0;
-    _setConn(true);
 
     async function syncLoop() {
         const authOverlay = document.getElementById('auth-overlay');
-        const authed = !(authOverlay && authOverlay.style.display !== 'none');
-        if(authed && !backendSync.syncing) {
+        const isOverlayVisible = authOverlay && (authOverlay.style.display === 'flex' || authOverlay.style.display === 'block');
+        if(!isOverlayVisible && !backendSync.syncing) {
             try {
                 const res = await fetch('/api/state');
-                if(res.status === 401) { location.reload(); return; }
+                if(res.status === 401) { showAuthRequired(); return; }
                 if(!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 if(!data.ok) throw new Error('bad payload');
@@ -1428,7 +1456,7 @@ window.setXrayStatus = async function(action) {
     if(action !== 'clear_logs') showToast('Executing ' + action + '...', 'info');
     try {
         let res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action}), headers: {'Content-Type': 'application/json'} });
-        if(res.status === 401) return location.reload();
+        if(res.status === 401) { showAuthRequired(); return; }
         if(res.ok && action !== 'clear_logs') showToast('Command completed: ' + action, 'success');
         else if(!res.ok) showToast('Command failed', 'error');
     } catch(e) { showToast('Network error', 'error'); }
@@ -1459,5 +1487,5 @@ window.importPanelDraftFromFile = function(event) {
     reader.readAsText(file);
 };
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a279ca0e7e3a8ed2',t:'MTc4NjE0MjQ5MQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a279cf4adb008ed2',t:'MTc4NjE0MjcwNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
