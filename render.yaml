@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: r2leafy-gateway
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: ADMIN_PASSWORD
+        value: admin
+      - key: SECRET_KEY
+        generateValue: true
+      - key: RAILWAY_API_TOKEN
+        sync: false
