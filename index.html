@@ -81,7 +81,7 @@
         .btn:active:not(:disabled) { transform: translateY(1px); }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .btn-primary { background: var(--accent); color: #000; border: none; box-shadow: 0 4px 12px rgba(139, 92, 246, 0.25); }
-        .btn-primary:hover:not(:disabled) { background: var(--accent-hover); color: #fff; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4); }
+        .btn-primary:hover:not(:disabled) { background: var(--accent-hover); color: #fff; box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4); }
         .btn-danger { background: var(--danger-bg); color: var(--danger); border: none; }
         .btn-danger:hover:not(:disabled) { background: var(--danger); color: #fff; }
         .btn-icon { padding: 6px; width: 38px; height: 38px; border-radius: var(--radius-sm); border: 1px solid transparent; display: inline-flex; align-items: center; justify-content: center; background: var(--bg-hover); color: var(--text-muted); transition: var(--transition); box-shadow: none; }
@@ -153,10 +153,10 @@
         .modal-footer { padding: 18px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 12px; flex-shrink: 0; background: rgba(255,255,255,0.01); border-radius: 0 0 var(--radius-md) var(--radius-md); }
         
         .chart-wrapper { position: relative; width: 100%; height: 100%; min-height: 0; min-width: 0; flex: 1; display: flex; align-items: center; justify-content: center; }
-        .map-container { width: 100%; height: 160px; background: var(--bg-base); position: relative; overflow: hidden; display: flex; justify-content: center; align-items: center; border-bottom: 1px solid var(--border); background-image: radial-gradient(var(--border) 1px, transparent 1px); background-size: 20px 20px; flex-shrink: 0; }
+        .map-container { width: 100%; height: 160px; background: var(--bg-base); position: relative; overflow: hidden; display: flex; justify-content: center; align-items: center; border-bottom: 1px solid var(--border); background-image: radial-gradient(rgba(139, 92, 246, 0.15) 1px, transparent 1px); background-size: 20px 20px; flex-shrink: 0; }
         @keyframes sweep { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @keyframes pulseDot { 0% { transform: scale(1); box-shadow: 0 0 10px var(--accent); } 50% { transform: scale(1.5); box-shadow: 0 0 25px var(--accent); } 100% { transform: scale(1); box-shadow: 0 0 10px var(--accent); } }
-        .radar-sweep { position: absolute; width: 300px; height: 300px; border-radius: 50%; background: conic-gradient(from 0deg, rgba(16,185,129,0) 70%, rgba(16,185,129,0.15) 100%); animation: sweep 3s linear infinite; }
+        .radar-sweep { position: absolute; width: 300px; height: 300px; border-radius: 50%; background: conic-gradient(from 0deg, rgba(139, 92, 246, 0) 65%, rgba(139, 92, 246, 0.4) 100%); animation: sweep 3s linear infinite; }
         .map-dot { position: absolute; width: 6px; height: 6px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 10px var(--accent); animation: pulseDot 2s infinite; z-index: 2; }
         
         .terminal { background: #050505; color: #a1a1aa; padding: 20px; font-size: 0.8rem; line-height: 1.6; flex: 1; overflow-y: auto; border-radius: 0 0 var(--radius-md) var(--radius-md); user-select: text; white-space: pre-wrap; font-family: 'JetBrains Mono', monospace; }
@@ -197,7 +197,7 @@
 
         .phone-item { position: relative; background: #1c1c1f; border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; cursor: default; border: 1px solid rgba(255,255,255,0.04); transition: var(--transition); }
         .phone-item:hover { background: #222225; border-color: rgba(255,255,255,0.1); }
-        .phone-item.info-item { background: linear-gradient(135deg, rgba(16,185,129,0.05), rgba(59,130,246,0.04)); border-color: rgba(16,185,129,0.1); }
+        .phone-item.info-item { background: linear-gradient(135deg, rgba(139,92,246,0.08), rgba(59,130,246,0.04)); border-color: rgba(139,92,246,0.2); }
         .phone-item-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.85rem; background: rgba(0,0,0,0.2); }
         .phone-item-body { flex: 1; min-width: 0; }
         .phone-item-name { font-size: 0.75rem; font-weight: 700; color: #e4e4e7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -353,7 +353,7 @@
                     <div class="panel" style="display:flex; flex-direction:column; justify-content:space-between;">
                         <div class="panel-header">
                             <div class="panel-title"><i class="fa-solid fa-location-crosshairs text-info"></i> IP &amp; Region Mapping</div>
-                            <span class="tag tag-green" id="ip-status-tag">Connected</span>
+                            <span class="tag tag-purple" id="ip-status-tag">Connected</span>
                         </div>
                         <div class="panel-body-unpadded" style="flex:1; display:flex; flex-direction:column;">
                             <div class="map-container" style="height: 140px;">
@@ -385,7 +385,7 @@
                     <div class="panel" style="display:flex; flex-direction:column; justify-content:space-between;">
                         <div class="panel-header">
                             <div class="panel-title"><i class="fa-solid fa-microchip text-warning"></i> Hardware Utilization</div>
-                            <span class="tag tag-green" id="hw-status-tag">Optimal</span>
+                            <span class="tag tag-purple" id="hw-status-tag">Optimal</span>
                         </div>
                         <div class="panel-body" style="flex:1; display:flex; flex-direction:column; gap:16px; padding:20px;">
                             <div class="chart-wrapper" style="height: 150px; min-height: 140px; flex-shrink:0;">
@@ -571,7 +571,7 @@
                     <div class="panel">
                         <div class="panel-header"><div class="panel-title"><i class="fa-solid fa-bolt text-warning"></i> Performance &amp; TCP</div></div>
                         <div class="panel-body">
-                            <div class="settings-row"><div class="settings-info"><h4>TCP Acceleration</h4><p>BBR congestion control (auto-detected on the server). Big throughput win on lossy links.</p></div><span class="tag tag-green" id="adv-tcpcc">—</span></div>
+                            <div class="settings-row"><div class="settings-info"><h4>TCP Acceleration</h4><p>BBR congestion control (auto-detected on the server). Big throughput win on lossy links.</p></div><span class="tag tag-purple" id="adv-tcpcc">—</span></div>
                             <div class="settings-row" style="border:none; padding-bottom: 20px;"><div class="settings-info"><h4>Active Connections</h4><p>Live client sessions through the core.</p></div><span class="tag tag-blue mono" id="adv-conns">0</span></div>
                         </div>
                     </div>
@@ -950,12 +950,12 @@
             if(t.webDomain) window.WEB_DOMAIN = t.webDomain;
             
             const _cc = String(t.tcpCc || 'bbr');
-            const _ccEl = document.getElementById('adv-tcpcc'); if(_ccEl){ _ccEl.innerText = _cc.toUpperCase(); _ccEl.className = 'tag tag-green'; }
+            const _ccEl = document.getElementById('adv-tcpcc'); if(_ccEl){ _ccEl.innerText = _cc.toUpperCase(); _ccEl.className = 'tag tag-purple'; }
             const _connEl = document.getElementById('adv-conns'); if(_connEl) _connEl.innerText = String(t.connections||0);
             
             const xrayUp = t.xrayRunning !== false;
             const statusTag = document.getElementById('dash-status-tag');
-            if(statusTag) { statusTag.className = xrayUp ? 'tag tag-green' : 'tag tag-red'; statusTag.innerText = xrayUp ? 'Online' : 'Offline'; }
+            if(statusTag) { statusTag.className = xrayUp ? 'tag tag-purple' : 'tag tag-red'; statusTag.innerText = xrayUp ? 'Online' : 'Offline'; }
             
             const dot = document.getElementById('topbar-xray-dot');
             if(dot) { dot.style.background = xrayUp ? 'var(--accent)' : 'var(--danger)'; dot.style.boxShadow = xrayUp ? '0 0 8px var(--accent)' : 'none'; }
@@ -1116,7 +1116,7 @@
                     <td><span class="tag tag-blue">${c.utls||'chrome'}</span></td>
                     <td><strong>${(c.usage||0).toFixed(2)}</strong> <span style="font-size:0.75rem; color:var(--text-muted);">/ ${c.limit===0?'∞':c.limit+' GB'}</span></td>
                     <td><span class="mono" style="color:var(--text-muted);">${c.expiry?new Date(c.expiry).toLocaleString():'Never'}</span></td>
-                    <td><span class="tag ${c.status?'tag-green':'tag-red'}">${c.status?'Active':'Disabled'}</span></td>
+                    <td><span class="tag ${c.status?'tag-purple':'tag-red'}">${c.status?'Active':'Disabled'}</span></td>
                     <td style="text-align:right;">
                         <button class="btn btn-icon" onclick="window.showQR('${c.id}')"><i class="fa-solid fa-qrcode"></i></button>
                         <button class="btn btn-icon" onclick="window.copyClientSubscriptionLink('${c.id}')"><i class="fa-solid fa-link"></i></button>
@@ -1350,7 +1350,7 @@
             if(!clientId) return showToast('Select a client first', 'error');
             subClientSubscriptions[clientId] = JSON.parse(JSON.stringify(subEntries));
             pushPanelState('saveSub');
-            showToast('Subscription Layout Saved!', 'success');
+            showToast('Subscription Configuration Saved!', 'success');
         };
 
         window.saveAdvancedRules = function() { pushPanelState('saveAdvancedRules'); showToast('Settings Saved', 'success'); }
@@ -1469,5 +1469,5 @@ window.importPanelDraftFromFile = function(event) {
     reader.readAsText(file);
 };
     </script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a279f39e7f1366c8',t:'MTc4NjE0NDE5NA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
