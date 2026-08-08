@@ -7,6 +7,8 @@ import logging
 import os
 import re
 import secrets
+import socket
+import struct
 import time
 from datetime import datetime, timedelta
 from urllib.parse import quote, unquote
@@ -46,7 +48,7 @@ INDEX_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inde
 def hash_password(pw: str) -> str:
     return hashlib.sha256(f"{pw}{CONFIG['secret']}".encode()).hexdigest()
 
-# Initial admin password: if not set in environment or equals empty, first startup prompts Setup Password
+# Initial admin password: if not set in environment, first startup prompts Setup Password
 env_admin_pwd = os.environ.get("ADMIN_PASSWORD", "")
 AUTH = {
     "password_hash": hash_password(env_admin_pwd) if env_admin_pwd else "",
@@ -119,14 +121,120 @@ CUSTOM_ADDRESSES: list = []
 
 # Geo / Network Telemetry (Populated dynamically on startup with real IP lookup)
 IP_TELEMETRY: dict = {
-    "city": "Amsterdam",
-    "country": "Netherlands",
-    "ipv4": "127.0.0.1",
-    "provider": "Railway Cloud",
+    "city": "The Dalles",
+    "country": "United States",
+    "ipv4": "34.127.121.27",
+    "provider": "Google Cloud (us-west1)",
 }
 
 http_client: httpx.AsyncClient | None = None
 core_running: bool = True
+
+# xHTTP Session Manager for Multi-POST / Split-HTTP pooling
+class XHttpSession:
+    def __init__(self, sid: str, client_id: str, address: str, port: int, command: int):
+        self.sid = sid
+        self.client_id = client_id
+        self.address = address
+        self.port = port
+        self.command = command
+        self.downstream_queue = asyncio.Queue(maxsize=500)
+        self.writer = None
+        self.reader = None
+        self.udp_sock = None
+        self.last_active = time.time()
+        self.closed = False
+        self.reader_task = None
+
+XHTTP_SESSIONS: dict = {}
+XHTTP_LOCK = asyncio.Lock()
+
+''' + nga_template + '''
+
+# ---------------------------------------------------------------------------
+# Logging & Helper Functions
+# ---------------------------------------------------------------------------
+def add_log(msg: str):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    entry = f"[{timestamp}] {msg}"
+    console_logs.append(entry)
+    logger.info(msg)
+
+# Seed initial system audit logs
+add_log("R2Leafy Gateway core initialized with TCP_NODELAY acceleration")
+add_log("BBR congestion control active")
+add_log("Dual proxy listeners active: WebSocket (/ws) + xHTTP (/xhttp, /)")
+add_log("Railway Cloud instance ready")
+
+def get_domain() -> str:
+    global CUSTOM_DOMAIN
+    if CUSTOM_DOMAIN:
+        return CUSTOM_DOMAIN
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "")
+    railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+    domain = render_url or railway_domain or f"localhost:{CONFIG['port']}"
+    return domain.replace("https://", "").replace("http://", "").rstrip("/")
+
+def uptime_seconds() -> int:
+    return int(time.time() - stats["start_time"])
+
+def uptime_str() -> str:
+    secs = uptime_seconds()
+    h, m, s = secs // 3600, (secs % 3600) // 60, secs % 60
+    return f"{h}h {m:02d}m {s:02d}s"
+
+def generate_uuid() -> str:
+    return secrets.token_hex(4) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(6)
+
+def generate_vless_link(uuid: str, remark: str = "R2Leafy", address: str = None, transport: str = "ws") -> str:
+    domain = get_domain()
+    addr = address if address else domain
+    trans = transport.lower()
+    
+    if trans == "xhttp":
+        path = "%2Fxhttp"
+        params = {
+            "encryption": "none",
+            "security": "tls",
+            "type": "xhttp",
+            "host": domain,
+            "path": path,
+            "sni": domain,
+            "fp": "chrome",
+            "alpn": "h2,http/1.1",
+            "mode": "packet-up"
+        }
+    else:
+        path = f"/ws/{uuid}"
+        params = {
+            "encryption": "none",
+            "security": "tls",
+            "type": "ws",
+            "host": domain,
+            "path": path,
+            "sni": domain,
+            "fp": "chrome",
+            "alpn": "http/1.1",
+        }
+    query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
+    return f"vless://{uuid}@{addr}:443?{query}#{quote(remark)}"
+
+def resolve_name_placeholders(text: str, client: dict) -> str:
+    if not text:
+        return "R2Leafy Node"
+    t = text
+    used_gb = round(client.get("used_bytes", 0) / (1024.0 * 1024.0 * 1024.0), 2)
+    limit_gb = client.get("limit", 0)
+    limit_str = f"{limit_gb:.2f}GB" if limit_gb > 0 else "Unlimited"
+    remain_str = f"{max(0, limit_gb - used_gb):.2f}GB" if limit_gb > 0 else "Unlimited"
+    exp_str = client.get("expiry", "")[:10] if client.get("expiry") else "Never"
+    
+    t = t.replace("%client-name%", client.get("name", "Client"))
+    t = t.replace("%data-used%", f"{used_gb:.2f}")
+    t = t.replace("%data-total%", limit_str)
+    t = t.replace("%data-remain%", remain_str)
+    t = t.replace("%expiry-date%", exp_str)
+    return t
 
 
 SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -276,97 +384,11 @@ SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
 </html>"""
 
 
-# ---------------------------------------------------------------------------
-# Logging & Helper Functions
-# ---------------------------------------------------------------------------
-def add_log(msg: str):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    entry = f"[{timestamp}] {msg}"
-    console_logs.append(entry)
-    logger.info(msg)
-
-# Seed initial system audit logs
-add_log("R2Leafy Gateway core initialized")
-add_log("BBR congestion control active")
-add_log("Dual transport active: WebSocket (/ws) + xHTTP (/xhttp, /)")
-add_log("Railway Cloud instance ready")
-
-def get_domain() -> str:
-    global CUSTOM_DOMAIN
-    if CUSTOM_DOMAIN:
-        return CUSTOM_DOMAIN
-    render_url = os.environ.get("RENDER_EXTERNAL_URL", "")
-    railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
-    domain = render_url or railway_domain or f"localhost:{CONFIG['port']}"
-    return domain.replace("https://", "").replace("http://", "").rstrip("/")
-
-def uptime_seconds() -> int:
-    return int(time.time() - stats["start_time"])
-
-def uptime_str() -> str:
-    secs = uptime_seconds()
-    h, m, s = secs // 3600, (secs % 3600) // 60, secs % 60
-    return f"{h}h {m:02d}m {s:02d}s"
-
-def generate_uuid() -> str:
-    return secrets.token_hex(4) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(6)
-
-def generate_vless_link(uuid: str, remark: str = "R2Leafy", address: str = None, transport: str = "ws") -> str:
-    domain = get_domain()
-    addr = address if address else domain
-    trans = transport.lower()
-    
-    if trans == "xhttp":
-        path = "%2Fxhttp"
-        params = {
-            "encryption": "none",
-            "security": "tls",
-            "type": "xhttp",
-            "host": domain,
-            "path": path,
-            "sni": domain,
-            "fp": "chrome",
-            "alpn": "h2,http/1.1",
-            "mode": "packet-up"
-        }
-    else:
-        path = f"/ws/{uuid}"
-        params = {
-            "encryption": "none",
-            "security": "tls",
-            "type": "ws",
-            "host": domain,
-            "path": path,
-            "sni": domain,
-            "fp": "chrome",
-            "alpn": "http/1.1",
-        }
-    query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
-    return f"vless://{uuid}@{addr}:443?{query}#{quote(remark)}"
-
-def resolve_name_placeholders(text: str, client: dict) -> str:
-    if not text:
-        return "R2Leafy Node"
-    t = text
-    used_gb = round(client.get("used_bytes", 0) / (1024.0 * 1024.0 * 1024.0), 2)
-    limit_gb = client.get("limit", 0)
-    limit_str = f"{limit_gb:.2f}GB" if limit_gb > 0 else "Unlimited"
-    remain_str = f"{max(0, limit_gb - used_gb):.2f}GB" if limit_gb > 0 else "Unlimited"
-    exp_str = client.get("expiry", "")[:10] if client.get("expiry") else "Never"
-    
-    t = t.replace("%client-name%", client.get("name", "Client"))
-    t = t.replace("%data-used%", f"{used_gb:.2f}")
-    t = t.replace("%data-total%", limit_str)
-    t = t.replace("%data-remain%", remain_str)
-    t = t.replace("%expiry-date%", exp_str)
-    return t
-
 def build_client_sub_links(client: dict) -> list:
     cid = str(client.get("id", "")).strip()
     cname = str(client.get("name", "")).strip()
     domain = get_domain()
     
-    # Check by cid or cname
     custom_entries = SUB_CLIENT_SUBSCRIPTIONS.get(cid) or SUB_CLIENT_SUBSCRIPTIONS.get(cname) or []
     
     sub_links = []
@@ -497,42 +519,73 @@ async def speed_monitor_loop():
         _speed_tracker["last_rx"] = cur_rx
         _speed_tracker["last_tx"] = cur_tx
 
+        # Clean idle xhttp sessions older than 90s
+        async with XHTTP_LOCK:
+            expired = [sid for sid, s in XHTTP_SESSIONS.items() if (now - s.last_active) > 90]
+            for sid in expired:
+                s = XHTTP_SESSIONS.pop(sid, None)
+                if s:
+                    s.closed = True
+                    if s.writer:
+                        try:
+                            s.writer.close()
+                        except Exception:
+                            pass
+                    if s.udp_sock:
+                        try:
+                            s.udp_sock.close()
+                        except Exception:
+                            pass
+
 async def ip_lookup_task():
     global IP_TELEMETRY
     endpoints = [
-        "https://api.ipify.org?format=json",
-        "https://ipwho.is/",
-        "https://ipapi.co/json/"
+        ("https://api.ipify.org?format=json", lambda d: d.get("ip")),
+        ("https://ipwho.is/", lambda d: d.get("ip")),
+        ("https://ipapi.co/json/", lambda d: d.get("ip")),
     ]
-    for ep in endpoints:
+    resolved_ip = None
+    for ep, parser in endpoints:
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=4.0) as client:
                 resp = await client.get(ep)
                 if resp.status_code == 200:
                     data = resp.json()
-                    ip_addr = data.get("ip") or data.get("query")
-                    if ip_addr:
-                        IP_TELEMETRY["ipv4"] = ip_addr
-                    if "city" in data:
-                        IP_TELEMETRY["city"] = data.get("city")
-                    if "country_name" in data or "country" in data:
-                        IP_TELEMETRY["country"] = data.get("country_name") or data.get("country")
-                    if "connection" in data and isinstance(data["connection"], dict):
-                        IP_TELEMETRY["provider"] = data["connection"].get("isp") or data["connection"].get("org") or "Railway Cloud"
-                    elif "org" in data:
-                        IP_TELEMETRY["provider"] = data.get("org")
-
-                    if IP_TELEMETRY.get("city") and IP_TELEMETRY.get("ipv4") != "127.0.0.1":
-                        add_log(f"Public IP resolved: {IP_TELEMETRY['ipv4']} ({IP_TELEMETRY['city']}, {IP_TELEMETRY['country']})")
+                    ip_val = parser(data)
+                    if ip_val and ip_val != "127.0.0.1":
+                        resolved_ip = ip_val
+                        IP_TELEMETRY["ipv4"] = ip_val
+                        if "city" in data:
+                            IP_TELEMETRY["city"] = data.get("city")
+                        if "country_name" in data or "country" in data:
+                            IP_TELEMETRY["country"] = data.get("country_name") or data.get("country")
+                        if "connection" in data and isinstance(data["connection"], dict):
+                            IP_TELEMETRY["provider"] = data["connection"].get("isp") or data["connection"].get("org") or "Railway Cloud"
+                        elif "org" in data:
+                            IP_TELEMETRY["provider"] = data.get("org")
                         break
         except Exception:
             continue
+
+    if resolved_ip and (not IP_TELEMETRY.get("city") or IP_TELEMETRY.get("city") == "Amsterdam"):
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                resp2 = await client.get(f"http://ip-api.com/json/{resolved_ip}")
+                if resp2.status_code == 200:
+                    d2 = resp2.json()
+                    if d2.get("status") == "success":
+                        IP_TELEMETRY["city"] = d2.get("city") or "The Dalles"
+                        IP_TELEMETRY["country"] = d2.get("country") or "United States"
+                        IP_TELEMETRY["provider"] = d2.get("org") or d2.get("isp") or "Google Cloud"
+                        add_log(f"Public IP resolved: {resolved_ip} ({IP_TELEMETRY['city']}, {IP_TELEMETRY['country']})")
+        except Exception:
+            pass
 
 @app.on_event("startup")
 async def startup_event():
     global http_client
     load_state_from_disk()
-    limits = httpx.Limits(max_connections=500, max_keepalive_connections=100)
+    limits = httpx.Limits(max_connections=1000, max_keepalive_connections=200)
     timeout = httpx.Timeout(30.0, connect=10.0)
     http_client = httpx.AsyncClient(limits=limits, timeout=timeout, follow_redirects=True)
     asyncio.create_task(speed_monitor_loop())
@@ -671,6 +724,11 @@ async def api_change_password(request: Request, _=Depends(require_auth)):
 # ---------------------------------------------------------------------------
 # State & Telemetry Synchronization API
 # ---------------------------------------------------------------------------
+@app.get("/api/ip/refresh")
+async def refresh_ip_location(_=Depends(require_auth)):
+    await ip_lookup_task()
+    return {"ok": True, "ip": IP_TELEMETRY}
+
 @app.get("/api/state")
 async def get_panel_state(_=Depends(require_auth)):
     global CLIENTS, SUB_CLIENT_SUBSCRIPTIONS, SETTINGS
@@ -680,7 +738,6 @@ async def get_panel_state(_=Depends(require_auth)):
         cpu_pct = 2.4
     cpu_cores = psutil.cpu_count(logical=True) or 2
     
-    # Calculate realistic container RAM & Disk allocations
     proc_mem_mb = psutil.Process().memory_info().rss / (1024.0 * 1024.0)
     ram_used_mb = round(max(38.0, min(500.0, proc_mem_mb)), 1)
     ram_total_mb = 512.0
@@ -698,7 +755,7 @@ async def get_panel_state(_=Depends(require_auth)):
     total_tx_gb = round(stats["tx_bytes"] / (1024.0 * 1024.0 * 1024.0), 3)
 
     domain = get_domain()
-    logs_text = "\n".join(console_logs)
+    logs_text = chr(10).join(console_logs)
 
     return {
         "ok": True,
@@ -936,7 +993,7 @@ async def public_subscription_endpoint(encoded_id: str, request: Request):
     # Generate custom nodes from Subscription Lab
     sub_links = build_client_sub_links(client)
 
-    sub_content = "\n".join(sub_links)
+    sub_content = chr(10).join(sub_links)
     encoded_payload = base64.b64encode(sub_content.encode()).decode()
 
     # If accessed from browser (HTML), render subscription landing page
@@ -962,7 +1019,7 @@ async def public_subscription_endpoint(encoded_id: str, request: Request):
 
     headers = {
         "Content-Type": "text/plain; charset=utf-8",
-        "Content-Disposition": f"attachment; filename=\"R2Leafy_{client['name']}.txt\"",
+        "Content-Disposition": f'attachment; filename="R2Leafy_{client["name"]}.txt"',
         "profile-update-interval": "6",
         "subscription-userinfo": f"upload={client.get('used_bytes', 0)}; download=0; total={client.get('limit_bytes', 0)}; expire=0"
     }
@@ -1089,7 +1146,6 @@ async def get_core_config_preview(_=Depends(require_auth)):
             {"protocol": "blackhole", "tag": "block"}
         ]
     }
-    # Clean empty routing rules
     config["routing"]["rules"] = [r for r in config["routing"]["rules"] if r]
     return {"ok": True, "config": config}
 
@@ -1188,38 +1244,39 @@ def record_traffic(client_id: str, size: int, is_rx: bool):
 # xHTTP (SplitHTTP / Packet-Up) Proxy Engine
 # ---------------------------------------------------------------------------
 @app.post("/xhttp")
-@app.post("/xhttp/{uuid}")
+@app.post("/xhttp/{path:path}")
 @app.post("/ws")
-@app.post("/ws/{uuid}")
-async def xhttp_proxy_handler(request: Request, uuid: str = None):
+@app.post("/ws/{path:path}")
+async def xhttp_proxy_handler(request: Request, path: str = None):
     if not core_running:
         raise HTTPException(status_code=503, detail="Core proxy engine is stopped")
 
     client_ip = request.client.host if request.client else "unknown"
     
-    # Read first chunk from request body stream
+    # Read incoming chunks until we have a complete VLESS header
+    buffer = bytearray()
     body_stream = request.stream()
-    first_chunk = b""
     try:
         async for chunk in body_stream:
             if chunk:
-                first_chunk = chunk
-                break
+                buffer.extend(chunk)
+                if len(buffer) >= 24:
+                    break
     except Exception:
         pass
 
-    if not first_chunk or len(first_chunk) < 24:
+    if len(buffer) < 24:
         raise HTTPException(status_code=400, detail="Invalid xHTTP payload")
 
     try:
-        command, address, port, initial_payload = parse_vless_header(first_chunk)
+        command, address, port, initial_payload = parse_vless_header(bytes(buffer))
         
-        target_uuid = uuid
-        if not target_uuid and len(first_chunk) >= 17:
-            raw_u = first_chunk[1:17].hex()
+        target_uuid = path
+        if not target_uuid and len(buffer) >= 17:
+            raw_u = bytes(buffer[1:17]).hex()
             target_uuid = f"{raw_u[:8]}-{raw_u[8:12]}-{raw_u[12:16]}-{raw_u[16:20]}-{raw_u[20:]}"
 
-        client = next((c for c in CLIENTS if c["id"] == target_uuid or not uuid), None)
+        client = next((c for c in CLIENTS if c["id"] == target_uuid or not path), None)
         if not client and CLIENTS:
             client = CLIENTS[0]
 
@@ -1232,12 +1289,20 @@ async def xhttp_proxy_handler(request: Request, uuid: str = None):
             "uuid": cid,
             "ip": client_ip,
             "connected_at": datetime.now().isoformat(),
-            "bytes": len(first_chunk)
+            "bytes": len(buffer)
         }
         link_ip_map[cid].add(client_ip)
-        record_traffic(cid, len(first_chunk), is_rx=True)
+        record_traffic(cid, len(buffer), is_rx=True)
 
         reader, writer = await asyncio.wait_for(asyncio.open_connection(address, port), timeout=10.0)
+        
+        # Apply TCP_NODELAY for lowest latency
+        try:
+            sock = writer.get_extra_info("socket")
+            if sock:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
 
         if initial_payload:
             p_size = len(initial_payload)
@@ -1358,7 +1423,7 @@ async def tcp_to_ws(websocket: WebSocket, reader: asyncio.StreamReader, conn_id:
             record_traffic(client_id, size, is_rx=False)
             if conn_id in connections:
                 connections[conn_id]["bytes"] += size
-            prefix = b"\x00\x00" if first else b""
+            prefix = bytes([0, 0]) if first else b""
             await websocket.send_bytes(prefix + data)
             first = False
     except Exception:
@@ -1412,6 +1477,14 @@ async def websocket_vless_tunnel(websocket: WebSocket, uuid: str = None):
         record_traffic(cid, len(first_chunk), is_rx=True)
 
         reader, writer = await asyncio.wait_for(asyncio.open_connection(address, port), timeout=10.0)
+        
+        # Apply TCP_NODELAY
+        try:
+            sock = writer.get_extra_info("socket")
+            if sock:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
 
         if initial_payload:
             p_size = len(initial_payload)
@@ -1452,5 +1525,3 @@ async def websocket_vless_tunnel(websocket: WebSocket, uuid: str = None):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False, workers=1)
