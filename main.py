@@ -458,6 +458,53 @@ def load_state_from_disk():
 
 load_state_from_disk()
 
+def ensure_default_client():
+    global CLIENTS, SUB_CLIENT_SUBSCRIPTIONS
+    if not CLIENTS:
+        default_id = generate_uuid()
+        default_client = {
+            "id": default_id,
+            "name": "Default",
+            "limit": 0.0,
+            "usage": 0.0,
+            "limit_bytes": 0,
+            "used_bytes": 0,
+            "max_connections": 0,
+            "expiry": "",
+            "status": 1,
+            "active": True,
+            "utls": "chrome",
+            "created_at": datetime.now().isoformat()
+        }
+        CLIENTS.append(default_client)
+        
+        # Configure Subscription Lab layout: Info at top, then WebSocket, then xHTTP
+        SUB_CLIENT_SUBSCRIPTIONS[default_id] = [
+            {
+                "id": "info-" + secrets.token_hex(4),
+                "type": "info",
+                "name": "📢 Welcome to R2Leafy | %data-used%GB / %data-total%",
+                "ipAddress": ""
+            },
+            {
+                "id": "ws-" + secrets.token_hex(4),
+                "type": "proxy",
+                "transport": "ws",
+                "name": "⚡ %client-name%-WebSocket",
+                "ipAddress": ""
+            },
+            {
+                "id": "xhttp-" + secrets.token_hex(4),
+                "type": "proxy",
+                "transport": "xhttp",
+                "name": "🚀 %client-name%-xHTTP",
+                "ipAddress": ""
+            }
+        ]
+        save_state_to_disk()
+
+ensure_default_client()
+
 # ---------------------------------------------------------------------------
 # Sessions & Auth Helpers
 # ---------------------------------------------------------------------------
