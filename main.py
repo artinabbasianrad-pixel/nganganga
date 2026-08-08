@@ -281,7 +281,7 @@ def add_log(msg: str):
 
 add_log("R2Leafy Gateway core initialized with TCP_NODELAY acceleration")
 add_log("BBR congestion control active")
-add_log("Ultra-fast WebSocket proxy active on port 443 (ALPN: h2, http/1.1)")
+add_log("Ultra-fast WebSocket proxy active on port 443 (ALPN: http/1.1)")
 add_log("Railway Cloud instance ready")
 
 def get_domain() -> str:
@@ -317,7 +317,7 @@ def generate_vless_link(uuid: str, remark: str = "R2Leafy", address: str = None)
         "path": path,
         "sni": domain,
         "fp": "chrome",
-        "alpn": "h2,http/1.1",
+        "alpn": "http/1.1",
     }
     query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
     return f"vless://{uuid}@{addr}:443?{query}#{quote(remark)}"
@@ -355,7 +355,7 @@ def build_client_sub_links(client: dict) -> list:
             
             if etype == "proxy":
                 ip = (entry.get("ipAddress") or "").strip() or domain
-                link = f"vless://{cid}@{ip}:443?encryption=none&security=tls&type=ws&host={domain}&path=%2Fws&sni={domain}&fp=chrome&alpn=h2,http/1.1#{quote(resolved_name)}"
+                link = f"vless://{cid}@{ip}:443?encryption=none&security=tls&type=ws&host={domain}&path=%2Fws&sni={domain}&fp=chrome&alpn=http/1.1#{quote(resolved_name)}"
                 sub_links.append(link)
             elif etype == "info":
                 info_link = f"trojan://{generate_uuid()}@127.0.0.1:80?security=none#{quote(resolved_name)}"
@@ -1106,7 +1106,7 @@ async def get_core_config_preview(_=Depends(require_auth)):
                     "security": "tls",
                     "tlsSettings": {
                         "serverName": domain,
-                        "alpn": ["h2", "http/1.1"]
+                        "alpn": ["http/1.1"]
                     },
                     "wsSettings": {
                         "path": "/ws",
