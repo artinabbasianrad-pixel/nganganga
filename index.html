@@ -437,10 +437,8 @@
                             <div class="panel-header">
                                 <div class="panel-title"><i class="fa-solid fa-list text-info"></i> Config Entries <span id="sub-entry-count" class="tag tag-blue" style="margin-left:8px;">0</span></div>
                                 <div style="display:flex; gap:8px;">
-                                    <select id="transport-sel" class="form-control" style="width: 130px; height: 30px; padding: 4px; font-size: 0.75rem;">
-                                        <option value="xhttp">xHTTP (Rec.)</option>
-                                        <option value="ws">WebSocket</option>
-                                    </select>
+                                    <span class="tag tag-purple" style="height:30px; display:inline-flex; align-items:center; gap:4px; font-size:0.75rem; padding:0 10px;"><i class="fa-solid fa-bolt"></i> WebSocket TLS</span>
+                                    <input type="hidden" id="transport-sel" value="ws">
                                     <button class="btn" style="padding:4px 10px; height: 30px; font-size:0.75rem;" onclick="window.addSubEntry('proxy')"><i class="fa-solid fa-plus"></i> Proxy</button>
                                     <button class="btn" style="padding:4px 10px; height: 30px; font-size:0.75rem; background:var(--info-bg); color:var(--info); border:none;" onclick="window.addSubEntry('info')"><i class="fa-solid fa-circle-info"></i> Info</button>
                                 </div>
@@ -839,7 +837,7 @@
         window.logEntries = [
             { time: new Date().toLocaleTimeString('en-US', { hour12: false }), msg: '[INFO] R2Leafy Gateway initialized' },
             { time: new Date().toLocaleTimeString('en-US', { hour12: false }), msg: '[INFO] Railway Cloud instance online' },
-            { time: new Date().toLocaleTimeString('en-US', { hour12: false }), msg: '[INFO] Dual transports active: WebSocket (/ws) + xHTTP (/xhttp)' }
+            { time: new Date().toLocaleTimeString('en-US', { hour12: false }), msg: '[INFO] High-performance WebSocket proxy active on port 443 (ALPN: h2, http/1.1)' }
         ];
 
         window.logCore = function(msg) {
@@ -1200,7 +1198,7 @@
             const cId = document.getElementById('sub-client').value;
             if(!cId) return showToast('Select a client first', 'error');
             let nName = '';
-            let transport = 'xhttp';
+            let transport = 'ws';
             if(type === 'proxy') {
                 transport = document.getElementById('transport-sel').value;
                 let pCnt = subEntries.filter(e => e.type === 'proxy').length;
@@ -1260,7 +1258,7 @@
                         ${entry.type === 'proxy' 
                             ? `<div style="display:flex; gap:10px; margin-top:4px;">
                                    <input type="text" class="form-control" style="flex:1; padding:8px 12px; font-size:0.8rem;" placeholder="IP (Leave blank for default)" value="${entry.ipAddress || ''}" oninput="window.updateSubEntry('${entry.id}', 'ipAddress', this.value)">
-                                   <span class="tag tag-purple" style="align-self:center;">${(entry.transport||'xhttp').toUpperCase()}</span>
+                                   <span class="tag tag-purple" style="align-self:center;">WEBSOCKET</span>
                                </div>` 
                             : ``}
                     </div>
@@ -1282,7 +1280,7 @@
             let html = '';
             subEntries.forEach(entry => {
                 const icon = entry.type === 'proxy' ? '<i class="fa-solid fa-shield-halved" style="color:var(--accent)"></i>' : '<i class="fa-solid fa-circle-info" style="color:var(--info)"></i>';
-                const sub = entry.type === 'proxy' ? (entry.ipAddress || 'Auto IP') + ` • ${(entry.transport||'xhttp').toUpperCase()}` : 'Info';
+                const sub = entry.type === 'proxy' ? (entry.ipAddress || 'Auto IP') + ` • WEBSOCKET` : 'Info';
                 const title = window.resolvePlaceholders(entry.name, client);
                 html += `<div class="phone-item ${entry.type==='info'?'info-item':''}">
                     <div class="phone-item-icon">${icon}</div>
@@ -1312,7 +1310,7 @@
                 let trans = entry.transport || 'xhttp';
                 
                 if(trans === 'ws') {
-                    link = `vless://${client.id}@${ip}:443?encryption=none&security=tls&sni=${domain}&fp=chrome&alpn=http/1.1&type=ws&host=${domain}&path=%2Fws#${name}`;
+                    link = `vless://${client.id}@${ip}:443?encryption=none&security=tls&sni=${domain}&fp=chrome&alpn=h2,http/1.1&type=ws&host=${domain}&path=%2Fws#${name}`;
                 } else {
                     link = `vless://${client.id}@${ip}:443?encryption=none&security=tls&sni=${domain}&fp=chrome&alpn=h2,http/1.1&type=xhttp&host=${domain}&path=%2Fxhttp&mode=packet-up#${name}`;
                 }
@@ -1489,5 +1487,5 @@ window.importPanelDraftFromFile = function(event) {
     reader.readAsText(file);
 };
     </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a27e082c3bf8a003',t:'MTc4NjE4Njk3OQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a27e14e75e6cdf30',t:'MTc4NjE4NzUwMA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
