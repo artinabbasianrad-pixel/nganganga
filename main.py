@@ -12,6 +12,7 @@ import struct
 import time
 from datetime import datetime, timedelta
 from urllib.parse import quote, unquote
+from contextlib import asynccontextmanager
 
 import httpx
 import psutil
@@ -22,7 +23,27 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("R2Leafy")
 
-app = FastAPI(title="R2Leafy", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global http_client
+    load_state_from_disk()
+    limits = httpx.Limits(max_connections=1000, max_keepalive_connections=200)
+    timeout = httpx.Timeout(30.0, connect=10.0)
+    http_client = httpx.AsyncClient(limits=limits, timeout=timeout, follow_redirects=True)
+    asyncio.create_task(speed_monitor_loop())
+    asyncio.create_task(ip_lookup_task())
+    add_log(f"R2Leafy gateway listening on port {CONFIG['port']}")
+    yield
+    if http_client:
+        await http_client.aclose()
+    save_state_to_disk()
+    add_log("R2Leafy gateway stopped")
+
+# ---------------------------------------------------------------------------
+# Frontend Serving Endpoints (Using index.html)
+# ---------------------------------------------------------------------------
+
+app = FastAPI(title="R2Leafy", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
 # Configuration & Environment
@@ -581,27 +602,6 @@ async def ip_lookup_task():
         except Exception:
             pass
 
-@app.on_event("startup")
-async def startup_event():
-    global http_client
-    load_state_from_disk()
-    limits = httpx.Limits(max_connections=1000, max_keepalive_connections=200)
-    timeout = httpx.Timeout(30.0, connect=10.0)
-    http_client = httpx.AsyncClient(limits=limits, timeout=timeout, follow_redirects=True)
-    asyncio.create_task(speed_monitor_loop())
-    asyncio.create_task(ip_lookup_task())
-    add_log(f"R2Leafy gateway listening on port {CONFIG['port']}")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    if http_client:
-        await http_client.aclose()
-    save_state_to_disk()
-    add_log("R2Leafy gateway stopped")
-
-# ---------------------------------------------------------------------------
-# Frontend Serving Endpoints (Using index.html)
-# ---------------------------------------------------------------------------
 def serve_index_html(request: Request) -> HTMLResponse:
     token = request.cookies.get(SESSION_COOKIE)
     is_auth = False
