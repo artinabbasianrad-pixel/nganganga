@@ -18,7 +18,7 @@ import httpx
 import psutil
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("R2Leafy")
@@ -121,25 +121,6 @@ IP_TELEMETRY: dict = {
 http_client: httpx.AsyncClient | None = None
 core_running: bool = True
 INDEX_HTML_CACHE: str | None = None
-
-# xHTTP Session Manager
-class XHttpSession:
-    def __init__(self, sid: str, client_id: str, address: str, port: int, command: int):
-        self.sid = sid
-        self.client_id = client_id
-        self.address = address
-        self.port = port
-        self.command = command
-        self.downstream_queue = asyncio.Queue(maxsize=500)
-        self.writer = None
-        self.reader = None
-        self.udp_sock = None
-        self.last_active = time.time()
-        self.closed = False
-
-XHTTP_SESSIONS: dict = {}
-XHTTP_LOCK = asyncio.Lock()
-
 
 
 SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -300,7 +281,7 @@ def add_log(msg: str):
 
 add_log("R2Leafy Gateway core initialized with TCP_NODELAY acceleration")
 add_log("BBR congestion control active")
-add_log("Dual proxy listeners ready: WebSocket (/ws) + xHTTP (/xhttp, /)")
+add_log("Ultra-fast WebSocket proxy active on port 443 (ALPN: h2, http/1.1)")
 add_log("Railway Cloud instance ready")
 
 def get_domain() -> str:
@@ -323,36 +304,21 @@ def uptime_str() -> str:
 def generate_uuid() -> str:
     return secrets.token_hex(4) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(6)
 
-def generate_vless_link(uuid: str, remark: str = "R2Leafy", address: str = None, transport: str = "ws") -> str:
+def generate_vless_link(uuid: str, remark: str = "R2Leafy", address: str = None) -> str:
     domain = get_domain()
     addr = address if address else domain
-    trans = transport.lower()
-    
-    if trans == "xhttp":
-        path = "%2Fxhttp"
-        params = {
-            "encryption": "none",
-            "security": "tls",
-            "type": "xhttp",
-            "host": domain,
-            "path": path,
-            "sni": domain,
-            "fp": "chrome",
-            "alpn": "h2,http/1.1",
-            "mode": "packet-up"
-        }
-    else:
-        path = f"/ws/{uuid}"
-        params = {
-            "encryption": "none",
-            "security": "tls",
-            "type": "ws",
-            "host": domain,
-            "path": path,
-            "sni": domain,
-            "fp": "chrome",
-            "alpn": "http/1.1",
-        }
+    path = f"/ws/{uuid}"
+    # High ALPN negotiation: h2, http/1.1 for maximum performance
+    params = {
+        "encryption": "none",
+        "security": "tls",
+        "type": "ws",
+        "host": domain,
+        "path": path,
+        "sni": domain,
+        "fp": "chrome",
+        "alpn": "h2,http/1.1",
+    }
     query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
     return f"vless://{uuid}@{addr}:443?{query}#{quote(remark)}"
 
@@ -389,24 +355,17 @@ def build_client_sub_links(client: dict) -> list:
             
             if etype == "proxy":
                 ip = (entry.get("ipAddress") or "").strip() or domain
-                transport = str(entry.get("transport", "xhttp")).lower()
-                
-                if transport == "ws":
-                    link = f"vless://{cid}@{ip}:443?encryption=none&security=tls&type=ws&host={domain}&path=%2Fws&sni={domain}&fp=chrome&alpn=http/1.1#{quote(resolved_name)}"
-                else:
-                    link = f"vless://{cid}@{ip}:443?encryption=none&security=tls&type=xhttp&host={domain}&path=%2Fxhttp&sni={domain}&fp=chrome&alpn=h2,http/1.1&mode=packet-up#{quote(resolved_name)}"
+                link = f"vless://{cid}@{ip}:443?encryption=none&security=tls&type=ws&host={domain}&path=%2Fws&sni={domain}&fp=chrome&alpn=h2,http/1.1#{quote(resolved_name)}"
                 sub_links.append(link)
             elif etype == "info":
                 info_link = f"trojan://{generate_uuid()}@127.0.0.1:80?security=none#{quote(resolved_name)}"
                 sub_links.append(info_link)
     
-    # Fallback to direct xHTTP + direct WS nodes + any custom addresses
     if not sub_links:
-        sub_links.append(generate_vless_link(cid, remark=f"R2Leafy🍃 {client['name']}-xHTTP", address=domain, transport="xhttp"))
-        sub_links.append(generate_vless_link(cid, remark=f"R2Leafy🍃 {client['name']}-WebSocket", address=domain, transport="ws"))
+        sub_links.append(generate_vless_link(cid, remark=f"R2Leafy🍃 {client['name']}-Direct", address=domain))
         for i, addr in enumerate(CUSTOM_ADDRESSES):
             if addr:
-                sub_links.append(generate_vless_link(cid, remark=f"R2Leafy🍃 {client['name']}-Node{i+1}", address=addr, transport="xhttp"))
+                sub_links.append(generate_vless_link(cid, remark=f"R2Leafy🍃 {client['name']}-Node{i+1}", address=addr))
     
     return sub_links
 
@@ -456,8 +415,6 @@ def load_state_from_disk():
         except Exception as e:
             logger.warning(f"Failed to load state from disk: {e}")
 
-load_state_from_disk()
-
 def ensure_default_client():
     global CLIENTS, SUB_CLIENT_SUBSCRIPTIONS
     if not CLIENTS:
@@ -478,7 +435,7 @@ def ensure_default_client():
         }
         CLIENTS.append(default_client)
         
-        # Configure Subscription Lab layout: Info at top, then WebSocket, then xHTTP
+        # Pre-configured Subscription Lab layout: Info banner at top, then ultra-fast WebSocket node
         SUB_CLIENT_SUBSCRIPTIONS[default_id] = [
             {
                 "id": "info-" + secrets.token_hex(4),
@@ -492,17 +449,11 @@ def ensure_default_client():
                 "transport": "ws",
                 "name": "⚡ %client-name%-WebSocket",
                 "ipAddress": ""
-            },
-            {
-                "id": "xhttp-" + secrets.token_hex(4),
-                "type": "proxy",
-                "transport": "xhttp",
-                "name": "🚀 %client-name%-xHTTP",
-                "ipAddress": ""
             }
         ]
         save_state_to_disk()
 
+load_state_from_disk()
 ensure_default_client()
 
 # ---------------------------------------------------------------------------
@@ -555,24 +506,6 @@ async def speed_monitor_loop():
         _speed_tracker["last_rx"] = cur_rx
         _speed_tracker["last_tx"] = cur_tx
 
-        # Clean idle xhttp sessions older than 90s
-        async with XHTTP_LOCK:
-            expired = [sid for sid, s in XHTTP_SESSIONS.items() if (now - s.last_active) > 90]
-            for sid in expired:
-                s = XHTTP_SESSIONS.pop(sid, None)
-                if s:
-                    s.closed = True
-                    if s.writer:
-                        try:
-                            s.writer.close()
-                        except Exception:
-                            pass
-                    if s.udp_sock:
-                        try:
-                            s.udp_sock.close()
-                        except Exception:
-                            pass
-
 async def ip_lookup_task():
     global IP_TELEMETRY
     endpoints = [
@@ -624,6 +557,7 @@ async def ip_lookup_task():
 async def lifespan(app: FastAPI):
     global http_client
     load_state_from_disk()
+    ensure_default_client()
     limits = httpx.Limits(max_connections=1000, max_keepalive_connections=200)
     timeout = httpx.Timeout(30.0, connect=10.0)
     http_client = httpx.AsyncClient(limits=limits, timeout=timeout, follow_redirects=True)
@@ -1172,7 +1106,7 @@ async def get_core_config_preview(_=Depends(require_auth)):
                     "security": "tls",
                     "tlsSettings": {
                         "serverName": domain,
-                        "alpn": ["http/1.1"]
+                        "alpn": ["h2", "http/1.1"]
                     },
                     "wsSettings": {
                         "path": "/ws",
@@ -1182,27 +1116,6 @@ async def get_core_config_preview(_=Depends(require_auth)):
                 "sniffing": {
                     "enabled": SETTINGS.get("advanced", {}).get("deepSniff", True),
                     "destOverride": ["http", "tls", "quic"]
-                }
-            },
-            {
-                "tag": "vless-xhttp-in",
-                "port": 443,
-                "protocol": "vless",
-                "settings": {
-                    "clients": [{"id": c["id"], "level": 0} for c in CLIENTS if c.get("status", 1)],
-                    "decryption": "none"
-                },
-                "streamSettings": {
-                    "network": "xhttp",
-                    "security": "tls",
-                    "tlsSettings": {
-                        "serverName": domain,
-                        "alpn": ["h2", "http/1.1"]
-                    },
-                    "xhttpSettings": {
-                        "path": "/xhttp",
-                        "mode": "packet-up"
-                    }
                 }
             }
         ],
@@ -1306,141 +1219,7 @@ def record_traffic(client_id: str, size: int, is_rx: bool):
         client["usage"] = round(client["used_bytes"] / (1024.0 * 1024.0 * 1024.0), 3)
 
 # ---------------------------------------------------------------------------
-# xHTTP (SplitHTTP / Packet-Up) Proxy Engine
-# ---------------------------------------------------------------------------
-@app.post("/xhttp")
-@app.post("/xhttp/{path:path}")
-@app.post("/ws")
-@app.post("/ws/{path:path}")
-async def xhttp_proxy_handler(request: Request, path: str = None):
-    if not core_running:
-        raise HTTPException(status_code=503, detail="Core proxy engine is stopped")
-
-    client_ip = request.client.host if request.client else "unknown"
-    
-    buffer = bytearray()
-    body_stream = request.stream()
-    try:
-        async for chunk in body_stream:
-            if chunk:
-                buffer.extend(chunk)
-                if len(buffer) >= 24:
-                    break
-    except Exception:
-        pass
-
-    if len(buffer) < 24:
-        raise HTTPException(status_code=400, detail="Invalid xHTTP payload")
-
-    try:
-        command, address, port, initial_payload = parse_vless_header(bytes(buffer))
-        
-        target_uuid = path
-        if not target_uuid and len(buffer) >= 17:
-            raw_u = bytes(buffer[1:17]).hex()
-            target_uuid = f"{raw_u[:8]}-{raw_u[8:12]}-{raw_u[12:16]}-{raw_u[16:20]}-{raw_u[20:]}"
-
-        client = next((c for c in CLIENTS if c["id"] == target_uuid or not path), None)
-        if not client and CLIENTS:
-            client = CLIENTS[0]
-
-        if not client or not client.get("status", 1):
-            raise HTTPException(status_code=403, detail="Invalid or disabled client")
-
-        cid = client["id"]
-        conn_id = secrets.token_urlsafe(8)
-        connections[conn_id] = {
-            "uuid": cid,
-            "ip": client_ip,
-            "connected_at": datetime.now().isoformat(),
-            "bytes": len(buffer)
-        }
-        link_ip_map[cid].add(client_ip)
-        record_traffic(cid, len(buffer), is_rx=True)
-
-        reader, writer = await asyncio.wait_for(asyncio.open_connection(address, port), timeout=10.0)
-        
-        try:
-            sock = writer.get_extra_info("socket")
-            if sock:
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        except Exception:
-            pass
-
-        if initial_payload:
-            p_size = len(initial_payload)
-            record_traffic(cid, p_size, is_rx=True)
-            writer.write(initial_payload)
-            await writer.drain()
-
-        async def stream_upstream():
-            try:
-                async for chunk in body_stream:
-                    if chunk:
-                        c_size = len(chunk)
-                        if not check_client_quota(cid, c_size):
-                            break
-                        record_traffic(cid, c_size, is_rx=True)
-                        writer.write(chunk)
-                        await writer.drain()
-            except Exception:
-                pass
-            finally:
-                try:
-                    writer.write_eof()
-                except Exception:
-                    pass
-
-        asyncio.create_task(stream_upstream())
-
-        async def stream_downstream():
-            try:
-                while True:
-                    data = await reader.read(RELAY_BUF)
-                    if not data:
-                        break
-                    d_size = len(data)
-                    if not check_client_quota(cid, d_size):
-                        break
-                    record_traffic(cid, d_size, is_rx=False)
-                    if conn_id in connections:
-                        connections[conn_id]["bytes"] += d_size
-                    yield data
-            except Exception:
-                pass
-            finally:
-                if writer:
-                    try:
-                        writer.close()
-                    except Exception:
-                        pass
-                info = connections.pop(conn_id, None)
-                if info:
-                    uid_clean = info.get("uuid")
-                    ip_clean = info.get("ip")
-                    if uid_clean and ip_clean:
-                        has_other = any(c.get("uuid") == uid_clean and c.get("ip") == ip_clean for c in connections.values())
-                        if not has_other and uid_clean in link_ip_map:
-                            link_ip_map[uid_clean].discard(ip_clean)
-
-        response_headers = {
-            "Content-Type": "application/octet-stream",
-            "Transfer-Encoding": "chunked",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive"
-        }
-        return StreamingResponse(stream_downstream(), headers=response_headers)
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        stats["total_errors"] += 1
-        error_logs.append({"error": str(exc), "time": datetime.now().isoformat()})
-        raise HTTPException(status_code=502, detail=f"Proxy error: {exc}")
-
-# ---------------------------------------------------------------------------
-# WebSocket VLESS Tunnel Engine
+# Ultra-Fast WebSocket VLESS Tunnel Engine
 # ---------------------------------------------------------------------------
 async def ws_to_tcp(websocket: WebSocket, writer: asyncio.StreamWriter, conn_id: str, client_id: str):
     try:
@@ -1539,6 +1318,7 @@ async def websocket_vless_tunnel(websocket: WebSocket, uuid: str = None):
 
         reader, writer = await asyncio.wait_for(asyncio.open_connection(address, port), timeout=10.0)
         
+        # Apply TCP_NODELAY for lowest latency
         try:
             sock = writer.get_extra_info("socket")
             if sock:
