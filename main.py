@@ -10,9 +10,9 @@ import secrets
 import socket
 import struct
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from urllib.parse import quote, unquote
-from contextlib import asynccontextmanager
 
 import httpx
 import psutil
@@ -23,48 +23,24 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("R2Leafy")
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global http_client
-    load_state_from_disk()
-    limits = httpx.Limits(max_connections=1000, max_keepalive_connections=200)
-    timeout = httpx.Timeout(30.0, connect=10.0)
-    http_client = httpx.AsyncClient(limits=limits, timeout=timeout, follow_redirects=True)
-    asyncio.create_task(speed_monitor_loop())
-    asyncio.create_task(ip_lookup_task())
-    add_log(f"R2Leafy gateway listening on port {CONFIG['port']}")
-    yield
-    if http_client:
-        await http_client.aclose()
-    save_state_to_disk()
-    add_log("R2Leafy gateway stopped")
-
-# ---------------------------------------------------------------------------
-# Frontend Serving Endpoints (Using index.html)
-# ---------------------------------------------------------------------------
-
-app = FastAPI(title="R2Leafy", docs_url=None, redoc_url=None, lifespan=lifespan)
-
 # ---------------------------------------------------------------------------
 # Configuration & Environment
 # ---------------------------------------------------------------------------
+def get_listen_port() -> int:
+    raw = os.environ.get("PORT", "8000")
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        return 8000
+
 CONFIG = {
-    "port": int(os.environ.get("PORT", 8000)),
+    "port": get_listen_port(),
     "secret": os.environ.get("SECRET_KEY", "r2leafy-default-secret-key"),
 }
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 SESSION_COOKIE = "r2leafy_session"
 SESSION_TTL = 60 * 60 * 24 * 7  # 7 days
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel_state.json")
-INDEX_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
 
 def hash_password(pw: str) -> str:
     return hashlib.sha256(f"{pw}{CONFIG['secret']}".encode()).hexdigest()
@@ -79,9 +55,6 @@ AUTH = {
 SESSIONS: dict = {}
 SESSIONS_LOCK = asyncio.Lock()
 
-# ---------------------------------------------------------------------------
-# In-Memory Stores & Locks
-# ---------------------------------------------------------------------------
 STATE_LOCK = asyncio.Lock()
 
 # Real-time connection tracking
@@ -102,7 +75,6 @@ hourly_traffic: dict = collections.defaultdict(int)
 console_logs: collections.deque = collections.deque(maxlen=300)
 error_logs: collections.deque = collections.deque(maxlen=100)
 
-# Speed calculation history
 _speed_tracker = {
     "last_time": time.time(),
     "last_rx": 0,
@@ -111,7 +83,6 @@ _speed_tracker = {
     "up_mbps": 0.0,
 }
 
-# Unified Clients & Settings Store (Starts with 0 clients - no auto Default client)
 CLIENTS: list = []
 SUB_CLIENT_SUBSCRIPTIONS: dict = {}
 SETTINGS: dict = {
@@ -137,10 +108,8 @@ SETTINGS: dict = {
 }
 
 CUSTOM_DOMAIN: str = ""
-# Empty clean list by default - no speedtest added automatically
 CUSTOM_ADDRESSES: list = []
 
-# Geo / Network Telemetry (Populated dynamically on startup with real IP lookup)
 IP_TELEMETRY: dict = {
     "city": "The Dalles",
     "country": "United States",
@@ -150,8 +119,9 @@ IP_TELEMETRY: dict = {
 
 http_client: httpx.AsyncClient | None = None
 core_running: bool = True
+INDEX_HTML_CACHE: str | None = None
 
-# xHTTP Session Manager for Multi-POST / Split-HTTP pooling
+# xHTTP Session Manager
 class XHttpSession:
     def __init__(self, sid: str, client_id: str, address: str, port: int, command: int):
         self.sid = sid
@@ -165,97 +135,10 @@ class XHttpSession:
         self.udp_sock = None
         self.last_active = time.time()
         self.closed = False
-        self.reader_task = None
 
 XHTTP_SESSIONS: dict = {}
 XHTTP_LOCK = asyncio.Lock()
 
-''' + nga_template + '''
-
-# ---------------------------------------------------------------------------
-# Logging & Helper Functions
-# ---------------------------------------------------------------------------
-def add_log(msg: str):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    entry = f"[{timestamp}] {msg}"
-    console_logs.append(entry)
-    logger.info(msg)
-
-# Seed initial system audit logs
-add_log("R2Leafy Gateway core initialized with TCP_NODELAY acceleration")
-add_log("BBR congestion control active")
-add_log("Dual proxy listeners active: WebSocket (/ws) + xHTTP (/xhttp, /)")
-add_log("Railway Cloud instance ready")
-
-def get_domain() -> str:
-    global CUSTOM_DOMAIN
-    if CUSTOM_DOMAIN:
-        return CUSTOM_DOMAIN
-    render_url = os.environ.get("RENDER_EXTERNAL_URL", "")
-    railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
-    domain = render_url or railway_domain or f"localhost:{CONFIG['port']}"
-    return domain.replace("https://", "").replace("http://", "").rstrip("/")
-
-def uptime_seconds() -> int:
-    return int(time.time() - stats["start_time"])
-
-def uptime_str() -> str:
-    secs = uptime_seconds()
-    h, m, s = secs // 3600, (secs % 3600) // 60, secs % 60
-    return f"{h}h {m:02d}m {s:02d}s"
-
-def generate_uuid() -> str:
-    return secrets.token_hex(4) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(6)
-
-def generate_vless_link(uuid: str, remark: str = "R2Leafy", address: str = None, transport: str = "ws") -> str:
-    domain = get_domain()
-    addr = address if address else domain
-    trans = transport.lower()
-    
-    if trans == "xhttp":
-        path = "%2Fxhttp"
-        params = {
-            "encryption": "none",
-            "security": "tls",
-            "type": "xhttp",
-            "host": domain,
-            "path": path,
-            "sni": domain,
-            "fp": "chrome",
-            "alpn": "h2,http/1.1",
-            "mode": "packet-up"
-        }
-    else:
-        path = f"/ws/{uuid}"
-        params = {
-            "encryption": "none",
-            "security": "tls",
-            "type": "ws",
-            "host": domain,
-            "path": path,
-            "sni": domain,
-            "fp": "chrome",
-            "alpn": "http/1.1",
-        }
-    query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
-    return f"vless://{uuid}@{addr}:443?{query}#{quote(remark)}"
-
-def resolve_name_placeholders(text: str, client: dict) -> str:
-    if not text:
-        return "R2Leafy Node"
-    t = text
-    used_gb = round(client.get("used_bytes", 0) / (1024.0 * 1024.0 * 1024.0), 2)
-    limit_gb = client.get("limit", 0)
-    limit_str = f"{limit_gb:.2f}GB" if limit_gb > 0 else "Unlimited"
-    remain_str = f"{max(0, limit_gb - used_gb):.2f}GB" if limit_gb > 0 else "Unlimited"
-    exp_str = client.get("expiry", "")[:10] if client.get("expiry") else "Never"
-    
-    t = t.replace("%client-name%", client.get("name", "Client"))
-    t = t.replace("%data-used%", f"{used_gb:.2f}")
-    t = t.replace("%data-total%", limit_str)
-    t = t.replace("%data-remain%", remain_str)
-    t = t.replace("%expiry-date%", exp_str)
-    return t
 
 
 SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -404,6 +287,90 @@ SUB_HTML_TEMPLATE = r"""<!DOCTYPE html>
 </body>
 </html>"""
 
+
+# ---------------------------------------------------------------------------
+# Logging & Helper Functions
+# ---------------------------------------------------------------------------
+def add_log(msg: str):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    entry = f"[{timestamp}] {msg}"
+    console_logs.append(entry)
+    logger.info(msg)
+
+add_log("R2Leafy Gateway core initialized with TCP_NODELAY acceleration")
+add_log("BBR congestion control active")
+add_log("Dual proxy listeners ready: WebSocket (/ws) + xHTTP (/xhttp, /)")
+add_log("Railway Cloud instance ready")
+
+def get_domain() -> str:
+    global CUSTOM_DOMAIN
+    if CUSTOM_DOMAIN:
+        return CUSTOM_DOMAIN
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "")
+    railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+    domain = render_url or railway_domain or f"localhost:{get_listen_port()}"
+    return domain.replace("https://", "").replace("http://", "").rstrip("/")
+
+def uptime_seconds() -> int:
+    return int(time.time() - stats["start_time"])
+
+def uptime_str() -> str:
+    secs = uptime_seconds()
+    h, m, s = secs // 3600, (secs % 3600) // 60, secs % 60
+    return f"{h}h {m:02d}m {s:02d}s"
+
+def generate_uuid() -> str:
+    return secrets.token_hex(4) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(2) + "-" + secrets.token_hex(6)
+
+def generate_vless_link(uuid: str, remark: str = "R2Leafy", address: str = None, transport: str = "ws") -> str:
+    domain = get_domain()
+    addr = address if address else domain
+    trans = transport.lower()
+    
+    if trans == "xhttp":
+        path = "%2Fxhttp"
+        params = {
+            "encryption": "none",
+            "security": "tls",
+            "type": "xhttp",
+            "host": domain,
+            "path": path,
+            "sni": domain,
+            "fp": "chrome",
+            "alpn": "h2,http/1.1",
+            "mode": "packet-up"
+        }
+    else:
+        path = f"/ws/{uuid}"
+        params = {
+            "encryption": "none",
+            "security": "tls",
+            "type": "ws",
+            "host": domain,
+            "path": path,
+            "sni": domain,
+            "fp": "chrome",
+            "alpn": "http/1.1",
+        }
+    query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
+    return f"vless://{uuid}@{addr}:443?{query}#{quote(remark)}"
+
+def resolve_name_placeholders(text: str, client: dict) -> str:
+    if not text:
+        return "R2Leafy Node"
+    t = text
+    used_gb = round(client.get("used_bytes", 0) / (1024.0 * 1024.0 * 1024.0), 2)
+    limit_gb = client.get("limit", 0)
+    limit_str = f"{limit_gb:.2f}GB" if limit_gb > 0 else "Unlimited"
+    remain_str = f"{max(0, limit_gb - used_gb):.2f}GB" if limit_gb > 0 else "Unlimited"
+    exp_str = client.get("expiry", "")[:10] if client.get("expiry") else "Never"
+    
+    t = t.replace("%client-name%", client.get("name", "Client"))
+    t = t.replace("%data-used%", f"{used_gb:.2f}")
+    t = t.replace("%data-total%", limit_str)
+    t = t.replace("%data-remain%", remain_str)
+    t = t.replace("%expiry-date%", exp_str)
+    return t
 
 def build_client_sub_links(client: dict) -> list:
     cid = str(client.get("id", "")).strip()
@@ -602,6 +569,59 @@ async def ip_lookup_task():
         except Exception:
             pass
 
+# ---------------------------------------------------------------------------
+# Modern FastAPI Lifespan Context Manager
+# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global http_client
+    load_state_from_disk()
+    limits = httpx.Limits(max_connections=1000, max_keepalive_connections=200)
+    timeout = httpx.Timeout(30.0, connect=10.0)
+    http_client = httpx.AsyncClient(limits=limits, timeout=timeout, follow_redirects=True)
+    asyncio.create_task(speed_monitor_loop())
+    asyncio.create_task(ip_lookup_task())
+    add_log(f"R2Leafy gateway listening on port {get_listen_port()}")
+    yield
+    if http_client:
+        await http_client.aclose()
+    save_state_to_disk()
+    add_log("R2Leafy gateway stopped")
+
+app = FastAPI(title="R2Leafy", docs_url=None, redoc_url=None, lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---------------------------------------------------------------------------
+# Frontend Template Serving Endpoints
+# ---------------------------------------------------------------------------
+def get_raw_index_html() -> str:
+    global INDEX_HTML_CACHE
+    if INDEX_HTML_CACHE:
+        return INDEX_HTML_CACHE
+    candidates = [
+        INDEX_HTML_PATH,
+        os.path.join(os.getcwd(), "index.html"),
+        "index.html",
+        "/app/index.html",
+        "/home/user/index.html"
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    INDEX_HTML_CACHE = f.read()
+                    return INDEX_HTML_CACHE
+            except Exception:
+                pass
+    return "<!DOCTYPE html><html><body><h1>R2Leafy</h1><p>Running on Railway</p></body></html>"
+
 def serve_index_html(request: Request) -> HTMLResponse:
     token = request.cookies.get(SESSION_COOKIE)
     is_auth = False
@@ -610,11 +630,7 @@ def serve_index_html(request: Request) -> HTMLResponse:
         if exp and exp >= time.time():
             is_auth = True
 
-    try:
-        with open(INDEX_HTML_PATH, "r", encoding="utf-8") as f:
-            content = f.read()
-    except Exception as e:
-        content = f"<!DOCTYPE html><html><body><h1>R2Leafy</h1><p>Error reading index.html: {e}</p></body></html>"
+    content = get_raw_index_html()
 
     pass_setup_js = "true" if AUTH["pass_setup"] else "false"
     logged_in_js = "true" if is_auth else "false"
@@ -630,6 +646,7 @@ def serve_index_html(request: Request) -> HTMLResponse:
     return HTMLResponse(content=content, headers=headers)
 
 @app.get("/")
+@app.head("/")
 async def root_view(request: Request):
     return serve_index_html(request)
 
@@ -646,6 +663,7 @@ async def index_view(request: Request):
     return serve_index_html(request)
 
 @app.get("/health")
+@app.head("/health")
 async def health_check():
     return {
         "status": "ok",
@@ -992,7 +1010,6 @@ async def public_subscription_endpoint(encoded_id: str, request: Request):
 
     # Generate custom nodes from Subscription Lab
     sub_links = build_client_sub_links(client)
-
     sub_content = chr(10).join(sub_links)
     encoded_payload = base64.b64encode(sub_content.encode()).decode()
 
@@ -1189,8 +1206,8 @@ def parse_vless_header(first_chunk: bytes):
     if len(first_chunk) < 24:
         raise ValueError("Packet chunk too small for VLESS protocol")
     pos = 0
-    pos += 1  # version
-    pos += 16  # UUID
+    pos += 1
+    pos += 16
     addon_len = first_chunk[pos]
     pos += 1 + addon_len
     command = first_chunk[pos]
@@ -1199,16 +1216,16 @@ def parse_vless_header(first_chunk: bytes):
     pos += 2
     addr_type = first_chunk[pos]
     pos += 1
-    if addr_type == 1:  # IPv4
+    if addr_type == 1:
         addr_bytes = first_chunk[pos:pos + 4]
         pos += 4
         address = ".".join(str(b) for b in addr_bytes)
-    elif addr_type == 2:  # Domain
+    elif addr_type == 2:
         domain_len = first_chunk[pos]
         pos += 1
         address = first_chunk[pos:pos + domain_len].decode("utf-8", errors="ignore")
         pos += domain_len
-    elif addr_type == 3:  # IPv6
+    elif addr_type == 3:
         addr_bytes = first_chunk[pos:pos + 16]
         pos += 16
         address = ":".join(f"{addr_bytes[i]:02x}{addr_bytes[i+1]:02x}" for i in range(0, 16, 2))
@@ -1253,7 +1270,6 @@ async def xhttp_proxy_handler(request: Request, path: str = None):
 
     client_ip = request.client.host if request.client else "unknown"
     
-    # Read incoming chunks until we have a complete VLESS header
     buffer = bytearray()
     body_stream = request.stream()
     try:
@@ -1296,7 +1312,6 @@ async def xhttp_proxy_handler(request: Request, path: str = None):
 
         reader, writer = await asyncio.wait_for(asyncio.open_connection(address, port), timeout=10.0)
         
-        # Apply TCP_NODELAY for lowest latency
         try:
             sock = writer.get_extra_info("socket")
             if sock:
@@ -1310,7 +1325,6 @@ async def xhttp_proxy_handler(request: Request, path: str = None):
             writer.write(initial_payload)
             await writer.drain()
 
-        # Background task to stream remaining upload chunks from client to TCP socket
         async def stream_upstream():
             try:
                 async for chunk in body_stream:
@@ -1331,7 +1345,6 @@ async def xhttp_proxy_handler(request: Request, path: str = None):
 
         asyncio.create_task(stream_upstream())
 
-        # Generator to stream downstream TCP response chunks to HTTP response
         async def stream_downstream():
             try:
                 while True:
@@ -1478,7 +1491,6 @@ async def websocket_vless_tunnel(websocket: WebSocket, uuid: str = None):
 
         reader, writer = await asyncio.wait_for(asyncio.open_connection(address, port), timeout=10.0)
         
-        # Apply TCP_NODELAY
         try:
             sock = writer.get_extra_info("socket")
             if sock:
@@ -1525,3 +1537,5 @@ async def websocket_vless_tunnel(websocket: WebSocket, uuid: str = None):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
+    port = get_listen_port()
+    uvicorn.run(app, host="0.0.0.0", port=port, access_log=False)
