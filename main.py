@@ -41,6 +41,7 @@ CONFIG = {
 SESSION_COOKIE = "r2leafy_session"
 SESSION_TTL = 60 * 60 * 24 * 7  # 7 days
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel_state.json")
+INDEX_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
 
 def hash_password(pw: str) -> str:
     return hashlib.sha256(f"{pw}{CONFIG['secret']}".encode()).hexdigest()
